@@ -35,6 +35,21 @@ Progress is local-first and syncs to Supabase when signed in (email +
 The publishable API key in `src/lib/sync.ts` is safe to ship; row-level
 security keeps each user's rows private.
 
+## AI pronunciation tutor (Edge Function)
+
+The tutor lives in `supabase/functions/tutor/index.ts`. It keeps the AI
+API keys server-side: the app sends the recording + target text, the
+function returns the transcript (OpenAI Whisper, Romanian), a coach
+verdict from Gemini (score, per-word issues, one tip in EN/HE), and the
+app speaks the tip aloud. Users must be signed in to call it.
+
+One-time deploy (Supabase dashboard):
+
+1. **Edge Functions → Deploy a new function → Via Editor**, name it
+   exactly `tutor`, paste the file's contents, **Deploy**.
+2. **Edge Functions → Secrets**: add `OPENAI_API_KEY` and
+   `GEMINI_API_KEY`.
+
 ## Run locally
 
 ```bash

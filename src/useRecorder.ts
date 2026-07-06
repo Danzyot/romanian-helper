@@ -12,6 +12,7 @@ export function useRecorder() {
   const [status, setStatus] = useState<RecorderStatus>('idle')
   const [error, setError] = useState<RecorderError>(null)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
 
@@ -49,6 +50,7 @@ export function useRecorder() {
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop())
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType })
+        setAudioBlob(blob)
         setAudioUrl(URL.createObjectURL(blob))
         setStatus('recorded')
       }
@@ -70,9 +72,10 @@ export function useRecorder() {
   const reset = useCallback(() => {
     recorderRef.current?.stream.getTracks().forEach((t) => t.stop())
     setAudioUrl(null)
+    setAudioBlob(null)
     setStatus('idle')
     setError(null)
   }, [])
 
-  return { status, error, audioUrl, start, stop, reset }
+  return { status, error, audioUrl, audioBlob, start, stop, reset }
 }

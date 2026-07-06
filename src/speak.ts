@@ -28,3 +28,16 @@ export function speakRomanian(text: string, rate = 1): void {
   if (voice) utterance.voice = voice
   window.speechSynthesis.speak(utterance)
 }
+
+/** Speak feedback in the UI language (queued after anything playing). */
+export function speakFeedback(text: string, lang: 'en' | 'he'): void {
+  if (!('speechSynthesis' in window) || !text) return
+  const utterance = new SpeechSynthesisUtterance(text)
+  utterance.lang = lang === 'he' ? 'he-IL' : 'en-US'
+  if (voices.length === 0) refreshVoices()
+  const voice = voices.find((v) =>
+    v.lang.toLowerCase().startsWith(lang === 'he' ? 'he' : 'en'),
+  )
+  if (voice) utterance.voice = voice
+  window.speechSynthesis.speak(utterance)
+}

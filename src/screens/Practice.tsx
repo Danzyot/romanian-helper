@@ -1,11 +1,12 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { categories, dictionary, type Entry } from '../data/dictionary'
 import type { Lang, Strings } from '../i18n'
 import { search, looksRomanian } from '../lib/search'
 import { pickWords, recordPractice, unlockedTier } from '../lib/progress'
 import { roHint } from '../lib/roHint'
 import { getSettings } from '../lib/settings'
-import { speakRomanian } from '../speak'
+import { gradePronunciation, TutorError, type GradeResult } from '../lib/tutor'
+import { speakFeedback, speakRomanian } from '../speak'
 import { useRecorder } from '../useRecorder'
 
 interface Props {
@@ -53,9 +54,12 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Entry | null>(null)
   const [category, setCategory] = useState<string | null>(null)
-  const [practiced, setPracticed] = useState(false)
+  const [grading, setGrading] = useState(false)
+  const [grade, setGrade] = useState<GradeResult | null>(null)
+  const [tutorNote, setTutorNote] = useState<string | null>(null)
   const recorder = useRecorder()
   const playbackRef = useRef<HTMLAudioElement>(null)
+  const gradedBlobRef = useRef<Blob | null>(null)
 
   const results = useMemo(() => search(query), [query])
   const suggestions = useMemo(() => pickWords(6), [])
@@ -70,18 +74,40 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
   const choose = (entry: Entry) => {
     setSelected(entry)
     setQuery('')
-    setPracticed(false)
+    setGrade(null)
+    setTutorNote(null)
     recorder.reset()
     speakRomanian(entry.ro)
   }
 
-  const stopAndLog = () => {
-    recorder.stop()
-    if (selected && !selected.id.startsWith('custom:')) {
-      recordPractice(selected.id)
-    }
-    setPracticed(true)
-  }
+  // When a recording lands, send it to the tutor.
+  useEffect(() => {
+    const blob = recorder.audioBlob
+    if (!blob || !selected || blob === gradedBlobRef.current) return
+    gradedBlobRef.current = blob
+    const wordId = selected.id.startsWith('custom:') ? null : selected.id
+    setGrading(true)
+    setGrade(null)
+    setTutorNote(null)
+    gradePronunciation(blob, selected.ro, lang)
+      .then((result) => {
+        setGrade(result)
+        if (wordId) recordPractice(wordId, result.score)
+        if (result.tip) speakFeedback(result.tip, lang)
+      })
+      .catch((err: unknown) => {
+        if (wordId) recordPractice(wordId)
+        if (err instanceof TutorError && err.kind === 'auth') {
+          setTutorNote(s.tutorSignIn)
+        } else if (err instanceof TutorError && err.kind === 'unavailable') {
+          setTutorNote(s.tutorUnavailable)
+        } else {
+          setTutorNote(s.tutorFailed)
+        }
+      })
+      .finally(() => setGrading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recorder.audioBlob])
 
   const translation = (w: Entry) => [w.en, w.he].filter(Boolean).join(' · ')
   const catLabel = (c: string) => CATEGORY_LABELS[c]?.[lang] ?? c
@@ -156,17 +182,68 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
           </div>
 
           {recorder.status !== 'recording' ? (
-            <button className="btn record" onClick={recorder.start}>
-              🎙️ {s.record}
+            <button className="btn record" onClick={recorder.start} disabled={grading}>
+              🎙️ {recorder.status === 'recorded' ? s.tryAgainBtn : s.record}
             </button>
           ) : (
-            <button className="btn record recording" onClick={stopAndLog}>
+            <button className="btn record recording" onClick={recorder.stop}>
               ⏹️ {s.stop}
             </button>
           )}
           {recorder.status === 'recording' && (
             <p className="recording-note">{s.recording}</p>
           )}
+
+          {grading && <p className="grading-note">🎧 {s.grading}</p>}
+
+          {grade && (
+            <div className="verdict">
+              <div
+                className="score-ring"
+                style={{
+                  background: `conic-gradient(${
+                    grade.score >= 70 ? 'var(--green)' : grade.score >= 50 ? '#c07f10' : 'var(--red)'
+                  } ${grade.score}%, var(--card-inner) ${grade.score}% 100%)`,
+                }}
+              >
+                <b>{grade.score}</b>
+              </div>
+              {grade.understood !== null && (
+                <p className={grade.understood ? 'done-note' : 'error'}>
+                  {grade.understood ? s.understoodYes : s.understoodNo}
+                </p>
+              )}
+              {grade.words.length > 0 && (
+                <p className="perword" lang="ro" dir="ltr">
+                  {grade.words.map((w, i) => (
+                    <span key={i} className={w.ok ? 'w-ok' : 'w-bad'} title={w.issue}>
+                      {w.word}{' '}
+                    </span>
+                  ))}
+                </p>
+              )}
+              {grade.transcript !== null && (
+                <p className="heard">
+                  {grade.transcript
+                    ? `${s.heard}: “${grade.transcript}”`
+                    : s.heardNothing}
+                </p>
+              )}
+              {grade.tip && (
+                <p className="tip">
+                  {grade.tip}{' '}
+                  <button
+                    className="tip-speak"
+                    onClick={() => speakFeedback(grade.tip, lang)}
+                  >
+                    {s.speakTip}
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
+
+          {tutorNote && <p className="notice">{tutorNote}</p>}
 
           {recorder.status === 'recorded' && recorder.audioUrl && (
             <>
@@ -177,7 +254,6 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
                 ▶️ {s.playBack}
               </button>
               <audio ref={playbackRef} src={recorder.audioUrl} />
-              {practiced && <p className="done-note">{s.practiceDone}</p>}
             </>
           )}
 
