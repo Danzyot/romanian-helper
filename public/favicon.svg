@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#1d3557"/>
+  <!-- speech bubble -->
+  <path d="M116 130h280a40 40 0 0 1 40 40v150a40 40 0 0 1-40 40H236l-70 62v-62h-50a40 40 0 0 1-40-40V170a40 40 0 0 1 40-40z" fill="#fdf6ec"/>
+  <!-- sound waves -->
+  <g stroke="#e63946" stroke-width="26" stroke-linecap="round" fill="none">
+    <path d="M186 205v80"/>
+    <path d="M256 180v130"/>
+    <path d="M326 205v80"/>
+  </g>
+</svg>

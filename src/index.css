@@ -1,0 +1,164 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #fdf6ec;
+  --ink: #1d3557;
+  --accent: #457b9d;
+  --record: #e63946;
+  --card: #ffffff;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  min-height: 100dvh;
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.topbar h1 {
+  font-size: 1.4rem;
+}
+
+.lang-toggle {
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.4rem 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.card {
+  background: var(--card);
+  border-radius: 1.5rem;
+  padding: 1.5rem;
+  box-shadow: 0 4px 20px rgba(29, 53, 87, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  text-align: center;
+  flex: 1;
+  justify-content: center;
+}
+
+.counter {
+  color: var(--accent);
+  font-size: 1rem;
+}
+
+.word {
+  font-size: 3rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.translation {
+  font-size: 1.5rem;
+}
+
+.hint {
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+
+.btn {
+  border: none;
+  border-radius: 1rem;
+  min-height: 3.5rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.listen-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.listen-row .btn {
+  flex: 1;
+}
+
+.record {
+  background: var(--record);
+}
+
+.recording {
+  animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(230, 57, 70, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(230, 57, 70, 0);
+  }
+}
+
+.recording-note {
+  color: var(--record);
+  font-weight: 600;
+}
+
+.playback {
+  background: #2a9d8f;
+}
+
+.error {
+  color: var(--record);
+  font-size: 1rem;
+}
+
+.notice {
+  color: #8a6d1a;
+  background: #fff3cd;
+  border-radius: 0.75rem;
+  padding: 0.6rem;
+  font-size: 0.95rem;
+}
+
+.nav-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.nav-row .btn {
+  flex: 1;
+  background: var(--ink);
+}
