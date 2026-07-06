@@ -95,7 +95,9 @@ const strings = {
     accountSignedOut: 'Not signed in — progress is saved on this phone only.',
     accountSignedIn: (email: string) => `Signed in as ${email}`,
     accountEmail: 'Email address',
-    accountSendCode: 'Send sign-in link',
+    accountPassword: 'Password',
+    accountSignIn: 'Sign in',
+    accountSendCode: 'Or: email me a sign-in link',
     accountLinkSent:
       'Link sent! Open the email on this phone and tap "Sign in" — you will land back here, signed in.',
     accountSignOut: 'Sign out',
@@ -199,7 +201,9 @@ const strings = {
     accountSignedOut: 'לא מחוברת — ההתקדמות נשמרת רק בטלפון הזה.',
     accountSignedIn: (email: string) => `מחוברת בתור ${email}`,
     accountEmail: 'כתובת אימייל',
-    accountSendCode: 'שליחת קישור התחברות',
+    accountPassword: 'סיסמה',
+    accountSignIn: 'התחברות',
+    accountSendCode: 'או: שלחו לי קישור התחברות באימייל',
     accountLinkSent:
       'הקישור נשלח! פתחי את האימייל בטלפון הזה ולחצי על "Sign in" — תחזרי לכאן מחוברת.',
     accountSignOut: 'התנתקות',

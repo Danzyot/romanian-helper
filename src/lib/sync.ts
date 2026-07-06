@@ -34,6 +34,14 @@ export function currentUserEmail(): string | null {
 
 // ——— auth ———
 
+export async function signInWithPassword(
+  email: string,
+  password: string,
+): Promise<string | null> {
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  return error ? error.message : null
+}
+
 export async function sendLoginLink(email: string): Promise<string | null> {
   const { error } = await supabase.auth.signInWithOtp({
     email,

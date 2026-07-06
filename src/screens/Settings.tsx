@@ -8,6 +8,7 @@ import {
   getSyncStatus,
   onSyncStatus,
   sendLoginLink,
+  signInWithPassword,
   signOut,
   type SyncStatus,
 } from '../lib/sync'
@@ -21,6 +22,7 @@ interface Props {
 export default function Settings({ s, onClose, onChanged }: Props) {
   const [settings, setSettings] = useState<S>(getSettings)
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [linkSent, setLinkSent] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
   const [signedInAs, setSignedInAs] = useState<string | null>(currentUserEmail())
@@ -136,10 +138,36 @@ export default function Settings({ s, onClose, onChanged }: Props) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
+              <input
+                className="settings-input"
+                type="password"
+                dir="ltr"
+                placeholder={s.accountPassword}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
               {authError && <p className="error">{authError}</p>}
               {linkSent && <p className="done-note">{s.accountLinkSent}</p>}
               <button
                 className="btn listen"
+                disabled={busy || !email.includes('@') || password.length < 6}
+                onClick={async () => {
+                  setBusy(true)
+                  setAuthError(null)
+                  const err = await signInWithPassword(email.trim(), password)
+                  if (err) {
+                    setAuthError(err)
+                  } else {
+                    setSignedInAs(currentUserEmail())
+                    onChanged()
+                  }
+                  setBusy(false)
+                }}
+              >
+                {s.accountSignIn}
+              </button>
+              <button
+                className="btn subtle"
                 disabled={busy || !email.includes('@')}
                 onClick={async () => {
                   setBusy(true)
