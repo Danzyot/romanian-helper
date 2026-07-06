@@ -7,9 +7,8 @@ import {
   fullSync,
   getSyncStatus,
   onSyncStatus,
-  sendLoginCode,
+  sendLoginLink,
   signOut,
-  verifyLoginCode,
   type SyncStatus,
 } from '../lib/sync'
 
@@ -22,8 +21,7 @@ interface Props {
 export default function Settings({ s, onClose, onChanged }: Props) {
   const [settings, setSettings] = useState<S>(getSettings)
   const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
-  const [codeSent, setCodeSent] = useState(false)
+  const [linkSent, setLinkSent] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
   const [signedInAs, setSignedInAs] = useState<string | null>(currentUserEmail())
   const [sync, setSync] = useState<SyncStatus>(getSyncStatus())
@@ -31,7 +29,10 @@ export default function Settings({ s, onClose, onChanged }: Props) {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    onSyncStatus(setSync)
+    onSyncStatus((st) => {
+      setSync(st)
+      setSignedInAs(currentUserEmail())
+    })
   }, [])
 
   const apply = (patch: Partial<S>) => {
@@ -135,54 +136,22 @@ export default function Settings({ s, onClose, onChanged }: Props) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
-              {codeSent && (
-                <input
-                  className="settings-input"
-                  type="text"
-                  dir="ltr"
-                  inputMode="numeric"
-                  placeholder={s.accountCode}
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-              )}
               {authError && <p className="error">{authError}</p>}
-              {!codeSent ? (
-                <button
-                  className="btn listen"
-                  disabled={busy || !email.includes('@')}
-                  onClick={async () => {
-                    setBusy(true)
-                    setAuthError(null)
-                    const err = await sendLoginCode(email.trim())
-                    if (err) setAuthError(err)
-                    else setCodeSent(true)
-                    setBusy(false)
-                  }}
-                >
-                  {s.accountSendCode}
-                </button>
-              ) : (
-                <button
-                  className="btn listen"
-                  disabled={busy || code.trim().length < 6}
-                  onClick={async () => {
-                    setBusy(true)
-                    setAuthError(null)
-                    const err = await verifyLoginCode(email.trim(), code.trim())
-                    if (err) {
-                      setAuthError(err)
-                    } else {
-                      setSignedInAs(currentUserEmail())
-                      setCodeSent(false)
-                      onChanged()
-                    }
-                    setBusy(false)
-                  }}
-                >
-                  {s.accountVerify}
-                </button>
-              )}
+              {linkSent && <p className="done-note">{s.accountLinkSent}</p>}
+              <button
+                className="btn listen"
+                disabled={busy || !email.includes('@')}
+                onClick={async () => {
+                  setBusy(true)
+                  setAuthError(null)
+                  const err = await sendLoginLink(email.trim())
+                  if (err) setAuthError(err)
+                  else setLinkSent(true)
+                  setBusy(false)
+                }}
+              >
+                {s.accountSendCode}
+              </button>
             </>
           )}
         </section>

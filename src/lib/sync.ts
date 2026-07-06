@@ -34,22 +34,14 @@ export function currentUserEmail(): string | null {
 
 // ——— auth ———
 
-export async function sendLoginCode(email: string): Promise<string | null> {
+export async function sendLoginLink(email: string): Promise<string | null> {
   const { error } = await supabase.auth.signInWithOtp({
     email,
-    options: { shouldCreateUser: true },
-  })
-  return error ? error.message : null
-}
-
-export async function verifyLoginCode(
-  email: string,
-  code: string,
-): Promise<string | null> {
-  const { error } = await supabase.auth.verifyOtp({
-    email,
-    token: code,
-    type: 'email',
+    options: {
+      shouldCreateUser: true,
+      // land back in the app; the client picks the session out of the URL
+      emailRedirectTo: window.location.origin + import.meta.env.BASE_URL,
+    },
   })
   return error ? error.message : null
 }
