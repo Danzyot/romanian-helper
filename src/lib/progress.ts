@@ -1,11 +1,12 @@
 import { dictionary, type Entry } from '../data/dictionary'
+import { getSettings } from './settings'
 
 /**
  * Local-first progress store.
  *
- * All reads/writes go through this module so a remote backend (Supabase)
- * can be layered in later: on login, pull rows into localStorage; on each
- * `record*` call, push the changed row. See supabase/schema.sql.
+ * All reads/writes go through this module; the Supabase sync layer
+ * (src/lib/sync.ts) subscribes via `onChange` to push updates and calls
+ * `mergeRemote` after pulling rows. See supabase/schema.sql.
  */
 
 export interface WordStat {
@@ -38,6 +39,14 @@ export type Level = (typeof LEVELS)[number]
 // Points needed to *reach* each level (mastered words weighted by tier).
 const LEVEL_POINTS = [0, 25, 90, 220]
 
+type ChangeListener = (changedWordId: string | null, day: string) => void
+const listeners: ChangeListener[] = []
+
+/** Subscribe to progress changes (used by the sync layer). */
+export function onChange(fn: ChangeListener): void {
+  listeners.push(fn)
+}
+
 function emptyState(): ProgressState {
   return { stats: {}, activeDays: [], recentAnswers: [] }
 }
@@ -52,8 +61,10 @@ export function load(): ProgressState {
   }
 }
 
-function save(state: ProgressState): void {
+function save(state: ProgressState, changedWordId: string | null): void {
   localStorage.setItem(KEY, JSON.stringify(state))
+  const day = today()
+  for (const fn of listeners) fn(changedWordId, day)
 }
 
 function today(): string {
@@ -84,20 +95,32 @@ function applyResult(s: WordStat, ok: boolean): void {
   s.due = Date.now() + INTERVALS_H[s.box] * 3_600_000
 }
 
-/** Record a quiz answer. */
+/** Record a quiz answer tied to a dictionary word. */
 export function recordQuiz(id: string, ok: boolean): void {
   const state = load()
   applyResult(stat(state, id), ok)
+  pushAnswer(state, ok)
+  touchDay(state)
+  save(state, id)
+}
+
+/** Record an answer not tied to a dictionary word (sentences, texts). */
+export function recordOutcome(ok: boolean): void {
+  const state = load()
+  pushAnswer(state, ok)
+  touchDay(state)
+  save(state, null)
+}
+
+function pushAnswer(state: ProgressState, ok: boolean): void {
   state.recentAnswers.push(ok)
   if (state.recentAnswers.length > 30) state.recentAnswers.shift()
-  touchDay(state)
-  save(state)
 }
 
 /**
- * Record a pronunciation attempt. Until AI grading lands (Phase 1) callers
- * pass no score and it only counts as exposure; with a score it also moves
- * the Leitner box (>=70 counts as success).
+ * Record a pronunciation attempt. Until AI grading lands, callers pass no
+ * score and it only counts as exposure; with a score it also moves the
+ * Leitner box (>=70 counts as success).
  */
 export function recordPractice(id: string, score?: number): void {
   const state = load()
@@ -109,7 +132,31 @@ export function recordPractice(id: string, score?: number): void {
     applyResult(s, score >= 70)
   }
   touchDay(state)
-  save(state)
+  save(state, id)
+}
+
+/** Merge rows pulled from the remote store; keeps whichever side saw more. */
+export function mergeRemote(
+  remoteStats: Record<string, WordStat>,
+  remoteDays: string[],
+): void {
+  const state = load()
+  for (const [id, remote] of Object.entries(remoteStats)) {
+    const local = state.stats[id]
+    if (!local || remote.seen > local.seen) {
+      state.stats[id] = remote
+    }
+  }
+  state.activeDays = [...new Set([...state.activeDays, ...remoteDays])].sort()
+  if (state.activeDays.length > 400) {
+    state.activeDays = state.activeDays.slice(-400)
+  }
+  localStorage.setItem(KEY, JSON.stringify(state))
+}
+
+/** Wipe all local progress (used by settings → reset). */
+export function resetProgress(): void {
+  localStorage.removeItem(KEY)
 }
 
 // ——— derived metrics ———
@@ -182,13 +229,27 @@ function streak(state: ProgressState): number {
   return count
 }
 
-// ——— adaptive selection ———
+// ——— level & adaptive selection ———
 
-/** Highest tier the learner should currently see. */
+/** The level shown and used for content: manual override or computed. */
+export function effectiveLevel(state = load()): Level {
+  const mode = getSettings().levelMode
+  return mode === 'auto' ? summary(state).level : mode
+}
+
+function tierForLevel(level: Level): 1 | 2 | 3 {
+  if (level === 'A0') return 1
+  if (level === 'A1') return 2
+  return 3
+}
+
+/** Highest content tier the learner should currently see. */
 export function unlockedTier(state = load()): 1 | 2 | 3 {
-  const { level, accuracy } = summary(state)
+  const mode = getSettings().levelMode
+  if (mode !== 'auto') return tierForLevel(mode)
+  const { level, accuracy, mastered } = summary(state)
   const confident = accuracy === null || accuracy >= 0.6
-  if (level === 'A0') return confident && summary(state).mastered >= 10 ? 2 : 1
+  if (level === 'A0') return confident && mastered >= 10 ? 2 : 1
   if (level === 'A1') return 2
   return 3
 }

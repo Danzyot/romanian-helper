@@ -23,9 +23,17 @@ progress is stored locally on the device.
 
 ## Per-user sync (Supabase)
 
-Progress is local-first; `supabase/schema.sql` holds the table schema for
-per-user sync. Wiring it up requires a (free) Supabase project's URL and
-anon key — see PLAN.md.
+Progress is local-first and syncs to Supabase when signed in (email +
+6-digit code, in Settings ⚙️). One-time project setup:
+
+1. In the Supabase dashboard open **SQL Editor** and run
+   `supabase/schema.sql` (creates `word_stats` + `activity_days` with
+   row-level security).
+2. In **Authentication → Email Templates → Magic Link**, make sure the
+   body includes the code, e.g. add: `Your code: {{ .Token }}`.
+
+The publishable API key in `src/lib/sync.ts` is safe to ship; row-level
+security keeps each user's rows private.
 
 ## Run locally
 

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { t, type Lang } from './i18n'
 import { hasRomanianVoice } from './speak'
-import { summary } from './lib/progress'
+import { effectiveLevel } from './lib/progress'
+import { getSettings } from './lib/settings'
 import Practice from './screens/Practice'
 import Quiz from './screens/Quiz'
 import Progress from './screens/Progress'
+import Settings from './screens/Settings'
 
 type Tab = 'practice' | 'quiz' | 'progress'
 
@@ -13,7 +15,10 @@ export default function App() {
     () => (localStorage.getItem('romanian-helper:lang') as Lang) || 'en',
   )
   const [tab, setTab] = useState<Tab>('practice')
+  const [showSettings, setShowSettings] = useState(false)
   const [voiceMissing, setVoiceMissing] = useState(false)
+  // bump to re-render after settings/progress changes
+  const [rev, setRev] = useState(0)
 
   const s = t(lang)
 
@@ -32,16 +37,17 @@ export default function App() {
     }
   }, [])
 
-  // level chip refreshes whenever the visible tab changes
-  const level = summary().level
+  const level = effectiveLevel()
+  const manualLevel = getSettings().levelMode !== 'auto'
 
   return (
     <div className="app" dir={lang === 'he' ? 'rtl' : 'ltr'}>
       <header className="topbar">
         <h1>{s.appName}</h1>
         <div className="topbar-side">
-          <span className="level-chip">
+          <span className="level-chip" title={manualLevel ? s.levelManual : undefined}>
             {s.level} {level}
+            {manualLevel ? ' ✎' : ''}
           </span>
           <button
             className="lang-toggle"
@@ -49,16 +55,31 @@ export default function App() {
           >
             {s.switchLang}
           </button>
+          <button
+            className="lang-toggle gear"
+            aria-label={s.settings}
+            onClick={() => setShowSettings(true)}
+          >
+            ⚙️
+          </button>
         </div>
       </header>
 
-      <main className="content" key={tab}>
+      <main className="content" key={`${tab}-${rev}-${lang}`}>
         {tab === 'practice' && (
           <Practice lang={lang} s={s} voiceMissing={voiceMissing} />
         )}
         {tab === 'quiz' && <Quiz lang={lang} s={s} />}
         {tab === 'progress' && <Progress s={s} />}
       </main>
+
+      {showSettings && (
+        <Settings
+          s={s}
+          onClose={() => setShowSettings(false)}
+          onChanged={() => setRev((r) => r + 1)}
+        />
+      )}
 
       <nav className="tabs">
         <button
