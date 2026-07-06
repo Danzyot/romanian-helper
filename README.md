@@ -3,15 +3,29 @@
 A mobile-friendly app that helps Mom learn Romanian — starting with
 pronunciation. See [PLAN.md](PLAN.md) for the full roadmap.
 
-**Current status: Phase 0 (walking skeleton).** An installable PWA that:
+**Current status: dictionary, quizzes, and adaptive progress.** An
+installable PWA that:
 
-- shows beginner Romanian words with English/Hebrew translations
-- speaks each word with the phone's Romanian voice (normal and slow speed)
-- records her saying it and plays the recording back
+- has a ~250-word trilingual dictionary, searchable in Romanian, English,
+  or Hebrew (diacritic-insensitive — "branza" finds "brânză"), plus
+  free-typing any Romanian word not in the dictionary
+- speaks each word with the phone's Romanian voice (normal and slow speed),
+  records her saying it and plays the recording back
+- runs adaptive multiple-choice quizzes (word→meaning, meaning→word,
+  listen→pick)
+- tracks progress with spaced repetition (Leitner boxes), estimates a level
+  (A0→B1) that unlocks harder words automatically, and keeps a day streak
 - switches between an English and a Hebrew (RTL) interface
 
-Phase 0 needs **no API keys** — speech uses the browser's built-in
-text-to-speech (Android phones ship with a Romanian Google voice).
+Everything so far needs **no API keys** — speech uses the browser's built-in
+text-to-speech (Android phones ship with a Romanian Google voice), and
+progress is stored locally on the device.
+
+## Per-user sync (Supabase)
+
+Progress is local-first; `supabase/schema.sql` holds the table schema for
+per-user sync. Wiring it up requires a (free) Supabase project's URL and
+anon key — see PLAN.md.
 
 ## Run locally
 

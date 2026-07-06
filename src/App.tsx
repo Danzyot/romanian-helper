@@ -1,19 +1,25 @@
-import { useEffect, useRef, useState } from 'react'
-import { words } from './words'
+import { useEffect, useState } from 'react'
 import { t, type Lang } from './i18n'
-import { hasRomanianVoice, speakRomanian } from './speak'
-import { useRecorder } from './useRecorder'
+import { hasRomanianVoice } from './speak'
+import { summary } from './lib/progress'
+import Practice from './screens/Practice'
+import Quiz from './screens/Quiz'
+import Progress from './screens/Progress'
+
+type Tab = 'practice' | 'quiz' | 'progress'
 
 export default function App() {
-  const [lang, setLang] = useState<Lang>('en')
-  const [index, setIndex] = useState(0)
+  const [lang, setLang] = useState<Lang>(
+    () => (localStorage.getItem('romanian-helper:lang') as Lang) || 'en',
+  )
+  const [tab, setTab] = useState<Tab>('practice')
   const [voiceMissing, setVoiceMissing] = useState(false)
-  const recorder = useRecorder()
-  const playbackRef = useRef<HTMLAudioElement>(null)
 
   const s = t(lang)
-  const word = words[index]
-  const [backArrow, nextArrow] = lang === 'he' ? ['→', '←'] : ['←', '→']
+
+  useEffect(() => {
+    localStorage.setItem('romanian-helper:lang', lang)
+  }, [lang])
 
   // Voices load asynchronously; check once they had a chance to arrive.
   useEffect(() => {
@@ -26,84 +32,55 @@ export default function App() {
     }
   }, [])
 
-  const goTo = (nextIndex: number) => {
-    setIndex((nextIndex + words.length) % words.length)
-    recorder.reset()
-  }
+  // level chip refreshes whenever the visible tab changes
+  const level = summary().level
 
   return (
     <div className="app" dir={lang === 'he' ? 'rtl' : 'ltr'}>
       <header className="topbar">
         <h1>{s.appName}</h1>
-        <button
-          className="lang-toggle"
-          onClick={() => setLang(lang === 'en' ? 'he' : 'en')}
-        >
-          {s.switchLang}
-        </button>
-      </header>
-
-      <main className="card">
-        <p className="counter">{s.wordOf(index + 1, words.length)}</p>
-        <p className="word" lang="ro">
-          {word.ro}
-        </p>
-        <p className="translation">{lang === 'he' ? word.he : word.en}</p>
-        <p className="hint">
-          {s.soundsLike}: <span dir="ltr">{word.hint}</span>
-        </p>
-
-        <div className="listen-row">
-          <button className="btn listen" onClick={() => speakRomanian(word.ro)}>
-            🔊 {s.listen}
-          </button>
+        <div className="topbar-side">
+          <span className="level-chip">
+            {s.level} {level}
+          </span>
           <button
-            className="btn listen"
-            onClick={() => speakRomanian(word.ro, 0.6)}
+            className="lang-toggle"
+            onClick={() => setLang(lang === 'en' ? 'he' : 'en')}
           >
-            🐢 {s.listenSlow}
+            {s.switchLang}
           </button>
         </div>
+      </header>
 
-        {recorder.status !== 'recording' ? (
-          <button className="btn record" onClick={recorder.start}>
-            🎙️ {s.record}
-          </button>
-        ) : (
-          <button className="btn record recording" onClick={recorder.stop}>
-            ⏹️ {s.stop}
-          </button>
+      <main className="content" key={tab}>
+        {tab === 'practice' && (
+          <Practice lang={lang} s={s} voiceMissing={voiceMissing} />
         )}
-        {recorder.status === 'recording' && (
-          <p className="recording-note">{s.recording}</p>
-        )}
-
-        {recorder.status === 'recorded' && recorder.audioUrl && (
-          <>
-            <button
-              className="btn playback"
-              onClick={() => playbackRef.current?.play()}
-            >
-              ▶️ {s.playBack}
-            </button>
-            <audio ref={playbackRef} src={recorder.audioUrl} />
-          </>
-        )}
-
-        {recorder.error && (
-          <p className="error">
-            {recorder.error === 'denied' ? s.micDenied : s.micError}
-          </p>
-        )}
-        {voiceMissing && <p className="notice">{s.noVoice}</p>}
+        {tab === 'quiz' && <Quiz lang={lang} s={s} />}
+        {tab === 'progress' && <Progress s={s} />}
       </main>
 
-      <nav className="nav-row">
-        <button className="btn nav" onClick={() => goTo(index - 1)}>
-          {backArrow} {s.prev}
+      <nav className="tabs">
+        <button
+          className={tab === 'practice' ? 'tab on' : 'tab'}
+          onClick={() => setTab('practice')}
+        >
+          <span aria-hidden>🗣</span>
+          {s.tabPractice}
         </button>
-        <button className="btn nav" onClick={() => goTo(index + 1)}>
-          {s.next} {nextArrow}
+        <button
+          className={tab === 'quiz' ? 'tab on' : 'tab'}
+          onClick={() => setTab('quiz')}
+        >
+          <span aria-hidden>✏️</span>
+          {s.tabQuiz}
+        </button>
+        <button
+          className={tab === 'progress' ? 'tab on' : 'tab'}
+          onClick={() => setTab('progress')}
+        >
+          <span aria-hidden>📈</span>
+          {s.tabProgress}
         </button>
       </nav>
     </div>
