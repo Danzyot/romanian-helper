@@ -978,3 +978,24 @@ input:focus-visible {
   text-align: start;
   direction: ltr;
 }
+
+/* ——— per-word issue list (touch-friendly, no hover needed) ——— */
+.issue-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  text-align: start;
+  background: var(--paper);
+  border: 1px solid var(--card-inner);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.92rem;
+  color: var(--ink-soft);
+  width: 100%;
+}
+
+.issue-list b {
+  font-family: var(--serif);
+  color: var(--red);
+}

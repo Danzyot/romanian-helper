@@ -226,11 +226,26 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
               {grade.words.length > 0 && (
                 <p className="perword" lang="ro" dir="ltr">
                   {grade.words.map((w, i) => (
-                    <span key={i} className={w.ok ? 'w-ok' : 'w-bad'} title={w.issue}>
+                    <span key={i} className={w.ok ? 'w-ok' : 'w-bad'}>
                       {w.word}{' '}
                     </span>
                   ))}
                 </p>
+              )}
+              {grade.words.some((w) => !w.ok && w.issue) && (
+                <ul className="issue-list">
+                  {grade.words
+                    .filter((w) => !w.ok && w.issue)
+                    .slice(0, 10)
+                    .map((w, i) => (
+                      <li key={i}>
+                        <b lang="ro" dir="ltr">
+                          {w.word}
+                        </b>{' '}
+                        — {w.issue}
+                      </li>
+                    ))}
+                </ul>
               )}
               {grade.transcript !== null && (
                 <p className="heard">
