@@ -4,11 +4,12 @@ import { hasRomanianVoice } from './speak'
 import { effectiveLevel } from './lib/progress'
 import { getSettings } from './lib/settings'
 import Practice from './screens/Practice'
+import Talk from './screens/Talk'
 import Quiz from './screens/Quiz'
 import Progress from './screens/Progress'
 import Settings from './screens/Settings'
 
-type Tab = 'practice' | 'quiz' | 'progress'
+type Tab = 'practice' | 'talk' | 'quiz' | 'progress'
 
 export default function App() {
   const [lang, setLang] = useState<Lang>(
@@ -69,6 +70,7 @@ export default function App() {
         {tab === 'practice' && (
           <Practice lang={lang} s={s} voiceMissing={voiceMissing} />
         )}
+        {tab === 'talk' && <Talk lang={lang} s={s} />}
         {tab === 'quiz' && <Quiz lang={lang} s={s} />}
         {tab === 'progress' && <Progress s={s} />}
       </main>
@@ -88,6 +90,13 @@ export default function App() {
         >
           <span aria-hidden>🗣</span>
           {s.tabPractice}
+        </button>
+        <button
+          className={tab === 'talk' ? 'tab on' : 'tab'}
+          onClick={() => setTab('talk')}
+        >
+          <span aria-hidden>💬</span>
+          {s.tabTalk}
         </button>
         <button
           className={tab === 'quiz' ? 'tab on' : 'tab'}

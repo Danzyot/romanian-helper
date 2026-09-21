@@ -53,6 +53,56 @@ function markWordsFromTranscript(target: string, transcript: string | null): Gra
   }))
 }
 
+export interface ChatTurn {
+  role: 'user' | 'tutor'
+  text: string
+  /** translation of a tutor turn, or correction note on a user turn */
+  note?: string
+}
+
+export interface ConverseResult {
+  transcript: string | null
+  reply: string
+  translation: string
+  correction: string | null
+}
+
+export async function converseTurn(
+  input: { audio: Blob } | { text: string },
+  history: ChatTurn[],
+  feedbackLang: 'en' | 'he',
+): Promise<ConverseResult> {
+  const { data: sessionData } = await supabase.auth.getSession()
+  if (!sessionData.session) throw new TutorError('auth', 'not signed in')
+
+  const body: Record<string, unknown> = {
+    action: 'converse',
+    history: history.slice(-12).map(({ role, text }) => ({ role, text })),
+    feedbackLang,
+  }
+  if ('audio' in input) {
+    body.audio = await blobToBase64(input.audio)
+    body.mimeType = input.audio.type || 'audio/webm'
+  } else {
+    body.text = input.text
+  }
+
+  const { data, error } = await supabase.functions.invoke('tutor', { body })
+  if (error) {
+    const kind = /fetch/i.test(error.name ?? '') ? 'unavailable' : 'failed'
+    throw new TutorError(kind, error.message ?? String(error))
+  }
+  if (data?.error) {
+    throw new TutorError('failed', `${data.error}: ${data.detail ?? ''}`)
+  }
+  return {
+    transcript: data.transcript ?? null,
+    reply: String(data.reply ?? ''),
+    translation: String(data.translation ?? ''),
+    correction: data.correction ? String(data.correction) : null,
+  }
+}
+
 export async function gradePronunciation(
   audio: Blob,
   target: string,

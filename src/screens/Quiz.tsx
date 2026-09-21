@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { dictionary, type Entry } from '../data/dictionary'
 import { sentences } from '../data/sentences'
 import { passages, type Passage } from '../data/texts'
+import { verbs, PERSONS, PERSON_LABELS, type PersonIndex } from '../data/verbs'
 import type { Lang, Strings } from '../i18n'
 import {
   pickWords,
@@ -15,7 +16,9 @@ import {
   acceptedTranslations,
   checkWritten,
 } from '../lib/answers'
+import { gradePronunciation, TutorError } from '../lib/tutor'
 import { speakRomanian } from '../speak'
+import { useRecorder } from '../useRecorder'
 
 interface Props {
   lang: Lang
@@ -32,11 +35,15 @@ export type Mode =
   | 'clozeMcq'
   | 'clozeWrite'
   | 'text'
+  | 'conjMcq'
+  | 'conjWrite'
+  | 'conjSpeak'
 
 interface McqQ {
   kind: 'mcq'
   prompt: string
   promptRo?: boolean
+  promptSub?: string
   options: string[]
   optionsRo?: boolean
   answerIdx: number
@@ -50,6 +57,7 @@ interface WriteQ {
   kind: 'write'
   prompt: string
   promptRo?: boolean
+  promptSub?: string
   accepted: string[]
   solution: string
   inputDir: 'ltr' | 'rtl'
@@ -58,7 +66,19 @@ interface WriteQ {
   passage?: Passage
 }
 
-type Q = McqQ | WriteQ
+interface SpeakQ {
+  kind: 'speak'
+  prompt: string
+  promptRo?: boolean
+  promptSub: string
+  /** the full phrase she should say, e.g. "noi mergem" */
+  target: string
+  passage?: Passage
+  wordId?: string
+  translation?: string
+}
+
+type Q = McqQ | WriteQ | SpeakQ
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
@@ -83,7 +103,7 @@ function buildQuestions(mode: Mode, lang: Lang, s: Strings): Q[] {
   const n = getSettings().quizLength
   const meaning = (w: Entry) => (lang === 'he' ? w.he : w.en)
 
-  const wordQ = (kind: Exclude<Mode, 'mixed' | 'clozeMcq' | 'clozeWrite' | 'text'>) =>
+  const wordQ = (kind: 'mcqMeaning' | 'mcqWord' | 'listen' | 'writeMeaning' | 'writeRo') =>
     (target: Entry): Q => {
       switch (kind) {
         case 'mcqMeaning': {
@@ -172,6 +192,55 @@ function buildQuestions(mode: Mode, lang: Lang, s: Strings): Q[] {
       })
   }
 
+  const conjQs = (kind: 'mcq' | 'write' | 'speak'): Q[] => {
+    const tier = unlockedTier()
+    let pool = verbs.filter((v) => v.tier <= tier)
+    if (pool.length < 8) pool = verbs
+    return Array.from({ length: n }, (): Q => {
+      const verb = pool[Math.floor(Math.random() * pool.length)]
+      const p = Math.floor(Math.random() * 6) as PersonIndex
+      const meaning = lang === 'he' ? verb.he : verb.en
+      const personLabel = PERSON_LABELS[lang][p]
+      const answer = verb.forms[p]
+      const prompt = `${verb.inf} — ${meaning}`
+      if (kind === 'speak') {
+        const pronoun = PERSONS[p].split('/')[0]
+        return {
+          kind: 'speak',
+          prompt,
+          promptSub: `${PERSONS[p]} (${personLabel}) + ${verb.inf} = ?`,
+          target: `${pronoun} ${answer}`,
+        }
+      }
+      if (kind === 'write') {
+        return {
+          kind: 'write',
+          prompt,
+          promptSub: `${PERSONS[p]} (${personLabel}) ___`,
+          accepted: [answer],
+          solution: answer,
+          inputDir: 'ltr',
+        }
+      }
+      const others = [...new Set(verb.forms.filter((f) => f !== answer))]
+      let distract = shuffle(others).slice(0, 3)
+      while (distract.length < 3) {
+        const other = verbs[Math.floor(Math.random() * verbs.length)]
+        const f = other.forms[p]
+        if (f !== answer && !distract.includes(f)) distract.push(f)
+      }
+      const opts = shuffle([answer, ...distract])
+      return {
+        kind: 'mcq',
+        prompt,
+        promptSub: `${PERSONS[p]} (${personLabel}) ___`,
+        options: opts,
+        optionsRo: true,
+        answerIdx: opts.indexOf(answer),
+      }
+    })
+  }
+
   const textQs = (): Q[] => {
     const tier = unlockedTier()
     let pool = passages.filter((p) => p.tier <= tier)
@@ -211,6 +280,12 @@ function buildQuestions(mode: Mode, lang: Lang, s: Strings): Q[] {
       return clozeQs(true)
     case 'text':
       return textQs()
+    case 'conjMcq':
+      return conjQs('mcq')
+    case 'conjWrite':
+      return conjQs('write')
+    case 'conjSpeak':
+      return conjQs('speak')
     case 'mixed': {
       const kinds = [
         'mcqMeaning',
@@ -236,6 +311,9 @@ const MODES: { mode: Mode; icon: string }[] = [
   { mode: 'clozeMcq', icon: '🧩' },
   { mode: 'clozeWrite', icon: '📝' },
   { mode: 'text', icon: '📖' },
+  { mode: 'conjMcq', icon: '👥' },
+  { mode: 'conjWrite', icon: '🖊️' },
+  { mode: 'conjSpeak', icon: '🗣️' },
 ]
 
 export default function Quiz({ lang, s }: Props) {
@@ -247,6 +325,42 @@ export default function Quiz({ lang, s }: Props) {
   const [writtenResult, setWrittenResult] = useState<boolean | null>(null)
   const [correctCount, setCorrectCount] = useState(0)
   const [showTranslation, setShowTranslation] = useState(false)
+  // spoken-conjugation questions
+  const [speakResult, setSpeakResult] = useState<{
+    ok: boolean
+    score: number
+    transcript: string | null
+  } | null>(null)
+  const [speakBusy, setSpeakBusy] = useState(false)
+  const [speakNote, setSpeakNote] = useState<string | null>(null)
+  const recorder = useRecorder()
+  const gradedBlobRef = useRef<Blob | null>(null)
+
+  // grade a spoken-conjugation recording when it lands
+  useEffect(() => {
+    const blob = recorder.audioBlob
+    const current = questions[index]
+    if (!blob || blob === gradedBlobRef.current) return
+    if (!current || current.kind !== 'speak' || speakResult) return
+    gradedBlobRef.current = blob
+    setSpeakBusy(true)
+    setSpeakNote(null)
+    gradePronunciation(blob, current.target, lang)
+      .then((res) => {
+        const ok = res.score >= 60 || res.understood === true
+        setSpeakResult({ ok, score: res.score, transcript: res.transcript })
+        recordOutcome(ok)
+        if (ok) setCorrectCount((c) => c + 1)
+      })
+      .catch((err: unknown) => {
+        if (err instanceof TutorError && err.kind === 'auth') setSpeakNote(s.tutorSignIn)
+        else if (err instanceof TutorError && err.kind === 'unavailable')
+          setSpeakNote(s.tutorUnavailable)
+        else setSpeakNote(s.tutorFailed)
+      })
+      .finally(() => setSpeakBusy(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recorder.audioBlob])
 
   const modeLabel = (m: Mode): [string, string] => {
     switch (m) {
@@ -259,6 +373,9 @@ export default function Quiz({ lang, s }: Props) {
       case 'clozeMcq': return [s.modeClozeMcq, s.modeClozeMcqDesc]
       case 'clozeWrite': return [s.modeClozeWrite, s.modeClozeWriteDesc]
       case 'text': return [s.modeText, s.modeTextDesc]
+      case 'conjMcq': return [s.modeConjMcq, s.modeConjMcqDesc]
+      case 'conjWrite': return [s.modeConjWrite, s.modeConjWriteDesc]
+      case 'conjSpeak': return [s.modeConjSpeak, s.modeConjSpeakDesc]
     }
   }
 
@@ -271,6 +388,9 @@ export default function Quiz({ lang, s }: Props) {
     setWrittenResult(null)
     setCorrectCount(0)
     setShowTranslation(false)
+    setSpeakResult(null)
+    setSpeakNote(null)
+    recorder.reset()
   }
 
   const backToModes = () => setMode(null)
@@ -316,7 +436,12 @@ export default function Quiz({ lang, s }: Props) {
   }
 
   const q = questions[index]
-  const answered = q.kind === 'mcq' ? chosenIdx !== null : writtenResult !== null
+  const answered =
+    q.kind === 'mcq'
+      ? chosenIdx !== null
+      : q.kind === 'write'
+        ? writtenResult !== null
+        : speakResult !== null
 
   const record = (ok: boolean) => {
     if (q.wordId) recordQuiz(q.wordId, ok)
@@ -337,17 +462,31 @@ export default function Quiz({ lang, s }: Props) {
     record(ok)
   }
 
+  const skipSpeak = () => {
+    if (answered || q.kind !== 'speak') return
+    setSpeakResult({ ok: false, score: 0, transcript: null })
+    record(false)
+  }
+
   const next = () => {
     setChosenIdx(null)
     setWritten('')
     setWrittenResult(null)
+    setSpeakResult(null)
+    setSpeakNote(null)
     setShowTranslation(false)
+    recorder.reset()
     setIndex((i) => i + 1)
   }
 
   const wasCorrect =
-    q.kind === 'mcq' ? chosenIdx === q.answerIdx : writtenResult === true
-  const solutionText = q.kind === 'mcq' ? q.options[q.answerIdx] : q.solution
+    q.kind === 'mcq'
+      ? chosenIdx === q.answerIdx
+      : q.kind === 'write'
+        ? writtenResult === true
+        : speakResult?.ok === true
+  const solutionText =
+    q.kind === 'mcq' ? q.options[q.answerIdx] : q.kind === 'write' ? q.solution : q.target
 
   return (
     <div className="quiz">
@@ -382,6 +521,12 @@ export default function Quiz({ lang, s }: Props) {
           {q.prompt}
         </p>
 
+        {q.promptSub && (
+          <p className="quiz-promptsub" lang="ro" dir="ltr">
+            {q.promptSub}
+          </p>
+        )}
+
         {q.kind === 'mcq' && q.speakText && (
           <button
             className="btn listen quiz-play"
@@ -412,7 +557,7 @@ export default function Quiz({ lang, s }: Props) {
               )
             })}
           </div>
-        ) : (
+        ) : q.kind === 'write' ? (
           <div className="write-area">
             <input
               type="text"
@@ -436,6 +581,40 @@ export default function Quiz({ lang, s }: Props) {
                   {s.quizSkip}
                 </button>
               </div>
+            )}
+          </div>
+        ) : (
+          <div className="write-area">
+            <p className="quiz-say-hint">{s.quizSayIt}</p>
+            {!answered && !speakBusy && (
+              <>
+                {recorder.status !== 'recording' ? (
+                  <button className="btn record" onClick={recorder.start}>
+                    🎙️ {s.record}
+                  </button>
+                ) : (
+                  <button className="btn record recording" onClick={recorder.stop}>
+                    ⏹️ {s.stop}
+                  </button>
+                )}
+                {recorder.status !== 'recording' && (
+                  <button className="btn subtle" onClick={skipSpeak}>
+                    {s.quizSkip}
+                  </button>
+                )}
+              </>
+            )}
+            {speakBusy && <p className="grading-note">🎧 {s.grading}</p>}
+            {speakNote && <p className="notice">{speakNote}</p>}
+            {speakResult?.transcript != null && (
+              <p className="heard">
+                {s.heard}: “{speakResult.transcript}” · {speakResult.score}
+              </p>
+            )}
+            {recorder.error && (
+              <p className="error">
+                {recorder.error === 'denied' ? s.micDenied : s.micError}
+              </p>
             )}
           </div>
         )}

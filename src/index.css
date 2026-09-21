@@ -800,3 +800,145 @@ input:focus-visible {
 .btn:disabled {
   opacity: 0.55;
 }
+
+/* ——— conversation (Talk) ——— */
+.talk {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  min-height: 0;
+}
+
+.talk-thread {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-bottom: 0.3rem;
+}
+
+.talk-empty {
+  margin-top: 1rem;
+}
+
+.talk-hello {
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.bubble-row {
+  display: flex;
+}
+
+.bubble-row.user {
+  justify-content: flex-end;
+}
+
+.bubble-row.tutor {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 85%;
+  border-radius: 12px;
+  padding: 0.7rem 0.9rem;
+  position: relative;
+}
+
+.bubble.user {
+  background: var(--blue);
+  color: var(--paper);
+  border-end-end-radius: 3px;
+}
+
+.bubble.tutor {
+  background: var(--card);
+  border: 1.5px solid var(--card-line);
+  color: var(--ink);
+  border-end-start-radius: 3px;
+}
+
+.bubble p:first-child {
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  line-height: 1.4;
+}
+
+.bubble-translation {
+  margin-top: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.bubble-correction {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  background: #f6ecd2;
+  color: #8a6d1a;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+}
+
+.bubble-replay {
+  position: absolute;
+  inset-inline-end: -0.4rem;
+  bottom: -0.7rem;
+  border: 1.5px solid var(--card-line);
+  background: var(--card);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+}
+
+.talk-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  position: sticky;
+  bottom: 0;
+  background: var(--paper);
+  padding-top: 0.3rem;
+}
+
+.talk-typebox {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.talk-typebox input {
+  flex: 1;
+  border: 1.5px solid var(--card-line);
+  border-radius: 6px;
+  background: var(--card);
+  padding: 0.7rem 0.9rem;
+  font-size: 1rem;
+  color: var(--ink);
+  min-width: 0;
+}
+
+.talk-send {
+  min-height: 2.8rem;
+  min-width: 3.2rem;
+  padding: 0.3rem 0.8rem;
+}
+
+.talk-mic {
+  width: 100%;
+}
+
+/* ——— conjugation ——— */
+.quiz-promptsub {
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--blue);
+}
+
+.quiz-say-hint {
+  font-size: 0.92rem;
+  color: var(--ink-soft);
+}

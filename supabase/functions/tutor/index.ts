@@ -28,6 +28,20 @@ interface GradeRequest {
   feedbackLang: 'en' | 'he'
 }
 
+interface ConverseRequest {
+  action: 'converse'
+  /** base64 audio of the learner's turn (or use text instead) */
+  audio?: string
+  mimeType?: string
+  /** typed turn, when not speaking */
+  text?: string
+  /** prior turns, oldest first, capped by the client */
+  history: { role: 'user' | 'tutor'; text: string }[]
+  feedbackLang: 'en' | 'he'
+}
+
+type TutorRequest = GradeRequest | ConverseRequest
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -130,6 +144,66 @@ Respond with ONLY this JSON (no markdown, no extra text):
   }
 }
 
+interface ConverseReply {
+  reply: string
+  translation: string
+  correction: string | null
+}
+
+async function converse(
+  req: ConverseRequest,
+  transcript: string | null,
+  key: string,
+): Promise<ConverseReply> {
+  const tipLang = req.feedbackLang === 'he' ? 'Hebrew' : 'English'
+  const userTurn = transcript ?? req.text ?? ''
+  const historyText = req.history
+    .slice(-12)
+    .map((t) => `${t.role === 'user' ? 'Student' : 'You'}: ${t.text}`)
+    .join('\n')
+
+  const prompt = `You are Ana, a warm Romanian tutor having a spoken conversation with an adult beginner (her other languages are English and Hebrew). Keep the conversation going naturally: react to what she said, then ask ONE simple follow-up question. Use very simple A1-level Romanian, short sentences (max 15 words total).
+
+Conversation so far:
+${historyText || '(the conversation is just starting — greet her and ask something easy)'}
+
+Student's new turn${req.audio ? ' (audio attached — listen to it yourself; the transcript below may contain recognition errors)' : ''}: "${userTurn}"
+
+Respond with ONLY this JSON (no markdown):
+{"reply": "<your Romanian reply, simple, ending with a question>", "translation": "<translation of your reply in ${tipLang}>", "correction": <if her turn had a clear error (grammar, word choice${req.audio ? ', pronunciation you heard' : ''}), a SHORT friendly note in ${tipLang} showing the right way, else null>}`
+
+  const parts: unknown[] = [{ text: prompt }]
+  if (req.audio) {
+    parts.push({
+      inline_data: { mime_type: req.mimeType || 'audio/webm', data: req.audio },
+    })
+  }
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.7 },
+      }),
+    },
+  )
+  if (!res.ok) {
+    throw new Error(`gemini ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  }
+  const data = await res.json()
+  const text: string =
+    data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? ''
+  const parsed = JSON.parse(text)
+  return {
+    reply: String(parsed.reply ?? ''),
+    translation: String(parsed.translation ?? ''),
+    correction: parsed.correction ? String(parsed.correction) : null,
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS })
@@ -150,21 +224,48 @@ Deno.serve(async (req) => {
     )
   }
 
-  let body: GradeRequest
+  let body: TutorRequest
   try {
     body = await req.json()
   } catch {
     return json({ error: 'bad-json' }, 400)
   }
+
+  if ('audio' in body && body.audio && body.audio.length > 4_000_000) {
+    return json({ error: 'audio-too-long' }, 413)
+  }
+  const feedbackLang = body.feedbackLang === 'he' ? 'he' : 'en'
+
+  // ——— conversation turn ———
+  if (body.action === 'converse') {
+    if (!body.audio && !body.text) return json({ error: 'bad-request' }, 400)
+    let transcript: string | null = null
+    let transcriptError: string | undefined
+    if (body.audio) {
+      try {
+        transcript = await transcribe(
+          base64ToBytes(body.audio),
+          body.mimeType || 'audio/webm',
+          openaiKey,
+        )
+      } catch (e) {
+        transcriptError = String((e as Error).message)
+      }
+    }
+    try {
+      const reply = await converse(body, transcript, geminiKey)
+      return json({ transcript, transcriptError, ...reply })
+    } catch (e) {
+      return json({ error: 'converse-failed', detail: String((e as Error).message) }, 502)
+    }
+  }
+
+  // ——— pronunciation grading ———
   if (body.action !== 'grade' || !body.audio || !body.target) {
     return json({ error: 'bad-request' }, 400)
   }
-  if (body.audio.length > 4_000_000) {
-    return json({ error: 'audio-too-long' }, 413)
-  }
 
   const mimeType = body.mimeType || 'audio/webm'
-  const feedbackLang = body.feedbackLang === 'he' ? 'he' : 'en'
 
   // Run both AI calls in parallel; report partial results if one fails.
   const bytes = base64ToBytes(body.audio)
