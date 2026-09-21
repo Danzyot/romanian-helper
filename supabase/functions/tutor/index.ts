@@ -95,8 +95,9 @@ async function geminiJson(
   temperature: number,
   key: string,
 ): Promise<Record<string, unknown>> {
-  const models = ['gemini-2.5-flash', 'gemini-2.0-flash']
-  let lastError = 'gemini: no attempt made'
+  // "-latest" aliases always point at a live model; dated names get retired.
+  const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest']
+  const errors: string[] = []
   for (const model of models) {
     for (let attempt = 0; attempt < 2; attempt++) {
       let res: Response
@@ -113,12 +114,12 @@ async function geminiJson(
           },
         )
       } catch (e) {
-        lastError = `gemini ${model}: ${String((e as Error).message)}`
+        errors.push(`${model}: ${String((e as Error).message)}`)
         await new Promise((r) => setTimeout(r, 700))
         continue
       }
       if (!res.ok) {
-        lastError = `gemini ${model} ${res.status}: ${(await res.text()).slice(0, 200)}`
+        errors.push(`${model} ${res.status}: ${(await res.text()).slice(0, 160)}`)
         if (res.status === 429 || res.status >= 500) {
           await new Promise((r) => setTimeout(r, 900 * (attempt + 1)))
           continue // retry same model
@@ -134,18 +135,18 @@ async function geminiJson(
       const start = text.indexOf('{')
       const end = text.lastIndexOf('}')
       if (start === -1 || end <= start) {
-        lastError = `gemini ${model}: no JSON in reply`
+        errors.push(`${model}: no JSON in reply`)
         continue
       }
       try {
         return JSON.parse(text.slice(start, end + 1))
       } catch {
-        lastError = `gemini ${model}: invalid JSON`
+        errors.push(`${model}: invalid JSON`)
         continue // retry
       }
     }
   }
-  throw new Error(lastError)
+  throw new Error(`gemini failed [${errors.join(' | ')}]`)
 }
 
 async function coach(
