@@ -100,60 +100,77 @@ async function geminiJson(
   key: string,
 ): Promise<Record<string, unknown>> {
   // "-latest" aliases always point at a live model; dated names get retired.
-  const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest']
+  const models = ['gemini-flash-latest', 'gemini-2.5-flash']
   const errors: string[] = []
+
+  const attempt = async (model: string, withThinkingOff: boolean): Promise<Record<string, unknown> | { retryable: boolean; thinkingRejected?: boolean }> => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15_000)
+    let res: Response
+    try {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature,
+              // skip the reasoning pass on models that support turning it off:
+              // short structured replies do not need it and it costs seconds
+              ...(withThinkingOff ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+            },
+          }),
+        },
+      )
+    } catch (e) {
+      errors.push(`${model}: ${String((e as Error).message).slice(0, 80)}`)
+      return { retryable: true }
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!res.ok) {
+      const bodyText = (await res.text()).slice(0, 160)
+      errors.push(`${model} ${res.status}: ${bodyText}`)
+      if (res.status === 400 && withThinkingOff && /think/i.test(bodyText)) {
+        return { retryable: true, thinkingRejected: true }
+      }
+      return { retryable: res.status === 429 || res.status >= 500 }
+    }
+    const data = await res.json()
+    const text: string =
+      data.candidates?.[0]?.content?.parts
+        ?.map((p: { text?: string }) => p.text ?? '')
+        .join('') ?? ''
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    if (start === -1 || end <= start) {
+      errors.push(`${model}: no JSON in reply`)
+      return { retryable: true }
+    }
+    try {
+      return JSON.parse(text.slice(start, end + 1))
+    } catch {
+      errors.push(`${model}: invalid JSON`)
+      return { retryable: true }
+    }
+  }
+
   for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let res: Response
-      try {
-        res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts }],
-              generationConfig: {
-                responseMimeType: 'application/json',
-                temperature,
-                // short structured replies need no reasoning pass; skipping
-                // it cuts seconds off newer "thinking" models
-                thinkingConfig: { thinkingBudget: 0 },
-              },
-            }),
-          },
-        )
-      } catch (e) {
-        errors.push(`${model}: ${String((e as Error).message)}`)
-        await new Promise((r) => setTimeout(r, 700))
+    let thinkingOff = true
+    // at most two tries per model, bounded by the 15s per-attempt timeout
+    for (let i = 0; i < 2; i++) {
+      const result = await attempt(model, thinkingOff)
+      if (!('retryable' in result)) return result
+      if (result.thinkingRejected) {
+        thinkingOff = false // model insists on thinking; try once without the flag
         continue
       }
-      if (!res.ok) {
-        errors.push(`${model} ${res.status}: ${(await res.text()).slice(0, 160)}`)
-        if (res.status === 429 || res.status >= 500) {
-          await new Promise((r) => setTimeout(r, 900 * (attempt + 1)))
-          continue // retry same model
-        }
-        break // other 4xx: try the next model
-      }
-      const data = await res.json()
-      const text: string =
-        data.candidates?.[0]?.content?.parts
-          ?.map((p: { text?: string }) => p.text ?? '')
-          .join('') ?? ''
-      // tolerate markdown fences or stray prose around the JSON
-      const start = text.indexOf('{')
-      const end = text.lastIndexOf('}')
-      if (start === -1 || end <= start) {
-        errors.push(`${model}: no JSON in reply`)
-        continue
-      }
-      try {
-        return JSON.parse(text.slice(start, end + 1))
-      } catch {
-        errors.push(`${model}: invalid JSON`)
-        continue // retry
-      }
+      if (!result.retryable) break // hard 4xx: next model
+      await new Promise((r) => setTimeout(r, 500))
     }
   }
   throw new Error(`gemini failed [${errors.join(' | ')}]`)
@@ -230,7 +247,8 @@ How to behave:
 - When she is conversing in Romanian, reply in very simple A1-level Romanian, short (max 15 words), react warmly to what she said, and end with ONE simple question.
 - When she asks a question or asks for help — in any language (e.g. how to pronounce or say something, what a word means, a grammar question) — answer as a helpful tutor in ${tipLang}: give the Romanian word(s), a "sounds like" hint written for ${tipLang} readers, a short example, then invite her back into Romanian.
 - Use her personal facts naturally when relevant (her name, pets, family, interests).
-- If her turn had a clear error (grammar, word choice${req.audio ? ', pronunciation you heard' : ''}), add a short friendly correction.
+- EVERY TURN with audio, also check her Romanian pronunciation carefully: if any word was clearly mispronounced (wrong sound, wrong stress, missing syllable), name it in "correction" with how to say it right; if her pronunciation was good, "correction" is null — do not invent problems. Also flag grammar or word-choice errors there.
+- "heard" must be written in the language she actually spoke, in its normal spelling (Romanian in Romanian orthography, Hebrew in Hebrew letters, English in English). She only ever speaks Romanian, English, or Hebrew — never another language.
 
 Respond with ONLY this JSON (no markdown):
 {"heard": ${req.audio ? '"<exactly what she said, written in the language she spoke>"' : 'null'}, "reply": "<your reply>", "replyLang": "<ro|en|he — the main language of your reply>", "translation": <if the reply is Romanian, its ${tipLang} translation, else null>, "correction": <short friendly note in ${tipLang}, else null>, "remember": <ONE new lasting personal fact she shared this turn (a name, pet, family member, preference), phrased as a short English sentence, else null>}`
@@ -289,26 +307,18 @@ Deno.serve(async (req) => {
   // ——— conversation turn ———
   if (body.action === 'converse') {
     if (!body.audio && !body.text) return json({ error: 'bad-request' }, 400)
-    // Ana listens to the audio herself; the transcript is only for the chat
-    // bubble, so both calls run in parallel to keep turns fast.
-    const transcriptPromise: Promise<string | null> = body.audio
-      ? transcribe(base64ToBytes(body.audio), body.mimeType || 'audio/webm', openaiKey)
-      : Promise.resolve(null)
-    const [tr, reply] = await Promise.allSettled([
-      transcriptPromise,
-      converse(body, geminiKey),
-    ])
-    if (reply.status === 'rejected') {
+    // One call: Ana listens to the audio herself and reports what she heard.
+    // (A separate speech-to-text pass added latency and, without a language
+    // pin, misread accented Romanian as other languages.)
+    try {
+      const reply = await converse(body, geminiKey)
+      return json({ transcript: reply.heard, ...reply })
+    } catch (e) {
       return json(
-        { error: 'converse-failed', detail: String(reply.reason?.message) },
+        { error: 'converse-failed', detail: String((e as Error).message) },
         502,
       )
     }
-    return json({
-      transcript: tr.status === 'fulfilled' ? tr.value : null,
-      transcriptError: tr.status === 'rejected' ? String(tr.reason?.message) : undefined,
-      ...reply.value,
-    })
   }
 
   // ——— pronunciation grading ———
