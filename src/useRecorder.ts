@@ -42,7 +42,11 @@ export function useRecorder() {
       return
     }
     try {
-      const recorder = new MediaRecorder(stream, { mimeType: pickMimeType() })
+      // voice-optimized bitrate: smaller uploads, ~12 min under the 3MB cap
+      const recorder = new MediaRecorder(stream, {
+        mimeType: pickMimeType(),
+        audioBitsPerSecond: 32_000,
+      })
       chunksRef.current = []
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data)
