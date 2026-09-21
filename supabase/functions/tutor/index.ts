@@ -109,7 +109,13 @@ async function geminiJson(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ parts }],
-              generationConfig: { responseMimeType: 'application/json', temperature },
+              generationConfig: {
+                responseMimeType: 'application/json',
+                temperature,
+                // short structured replies need no reasoning pass; skipping
+                // it cuts seconds off newer "thinking" models
+                thinkingConfig: { thinkingBudget: 0 },
+              },
             }),
           },
         )
@@ -193,11 +199,9 @@ interface ConverseReply {
 
 async function converse(
   req: ConverseRequest,
-  transcript: string | null,
   key: string,
 ): Promise<ConverseReply> {
   const tipLang = req.feedbackLang === 'he' ? 'Hebrew' : 'English'
-  const userTurn = transcript ?? req.text ?? ''
   const historyText = req.history
     .slice(-12)
     .map((t) => `${t.role === 'user' ? 'Student' : 'You'}: ${t.text}`)
@@ -208,7 +212,7 @@ async function converse(
 Conversation so far:
 ${historyText || '(the conversation is just starting — greet her and ask something easy)'}
 
-Student's new turn${req.audio ? ' (audio attached — listen to it yourself; the transcript below may contain recognition errors)' : ''}: "${userTurn}"
+Student's new turn: ${req.audio ? '(attached as audio — listen to it yourself)' : `"${req.text ?? ''}"`}
 
 Respond with ONLY this JSON (no markdown):
 {"reply": "<your Romanian reply, simple, ending with a question>", "translation": "<translation of your reply in ${tipLang}>", "correction": <if her turn had a clear error (grammar, word choice${req.audio ? ', pronunciation you heard' : ''}), a SHORT friendly note in ${tipLang} showing the right way, else null>}`
@@ -263,25 +267,26 @@ Deno.serve(async (req) => {
   // ——— conversation turn ———
   if (body.action === 'converse') {
     if (!body.audio && !body.text) return json({ error: 'bad-request' }, 400)
-    let transcript: string | null = null
-    let transcriptError: string | undefined
-    if (body.audio) {
-      try {
-        transcript = await transcribe(
-          base64ToBytes(body.audio),
-          body.mimeType || 'audio/webm',
-          openaiKey,
-        )
-      } catch (e) {
-        transcriptError = String((e as Error).message)
-      }
+    // Ana listens to the audio herself; the transcript is only for the chat
+    // bubble, so both calls run in parallel to keep turns fast.
+    const transcriptPromise: Promise<string | null> = body.audio
+      ? transcribe(base64ToBytes(body.audio), body.mimeType || 'audio/webm', openaiKey)
+      : Promise.resolve(null)
+    const [tr, reply] = await Promise.allSettled([
+      transcriptPromise,
+      converse(body, geminiKey),
+    ])
+    if (reply.status === 'rejected') {
+      return json(
+        { error: 'converse-failed', detail: String(reply.reason?.message) },
+        502,
+      )
     }
-    try {
-      const reply = await converse(body, transcript, geminiKey)
-      return json({ transcript, transcriptError, ...reply })
-    } catch (e) {
-      return json({ error: 'converse-failed', detail: String((e as Error).message) }, 502)
-    }
+    return json({
+      transcript: tr.status === 'fulfilled' ? tr.value : null,
+      transcriptError: tr.status === 'rejected' ? String(tr.reason?.message) : undefined,
+      ...reply.value,
+    })
   }
 
   // ——— pronunciation grading ———
