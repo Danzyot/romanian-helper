@@ -48,7 +48,10 @@ export default function Talk({ lang, s }: Props) {
       if (err instanceof TutorError && err.kind === 'auth') setNote(s.tutorSignIn)
       else if (err instanceof TutorError && err.kind === 'unavailable')
         setNote(s.tutorUnavailable)
-      else setNote(s.talkFailed)
+      else {
+        const detail = err instanceof Error && err.message ? ` (${err.message.slice(0, 160)})` : ''
+        setNote(s.talkFailed + detail)
+      }
     } finally {
       setBusy(false)
       recorder.reset()

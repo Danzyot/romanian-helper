@@ -26,6 +26,30 @@ export class TutorError extends Error {
   }
 }
 
+/**
+ * When the function replies with an error status, supabase-js hides the
+ * response body inside error.context — dig the {error, detail} out of it
+ * so failures are diagnosable from the UI.
+ */
+async function toTutorError(error: {
+  name?: string
+  message?: string
+  context?: unknown
+}): Promise<TutorError> {
+  const kind = /fetch/i.test(error.name ?? '') ? 'unavailable' : 'failed'
+  let detail = error.message ?? String(error)
+  const ctx = error.context
+  if (ctx instanceof Response) {
+    try {
+      const body = await ctx.clone().json()
+      if (body?.error) detail = `${body.error}: ${body.detail ?? ''}`
+    } catch {
+      /* body not JSON — keep the generic message */
+    }
+  }
+  return new TutorError(kind, detail)
+}
+
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer())
   let bin = ''
@@ -89,8 +113,7 @@ export async function converseTurn(
 
   const { data, error } = await supabase.functions.invoke('tutor', { body })
   if (error) {
-    const kind = /fetch/i.test(error.name ?? '') ? 'unavailable' : 'failed'
-    throw new TutorError(kind, error.message ?? String(error))
+    throw await toTutorError(error)
   }
   if (data?.error) {
     throw new TutorError('failed', `${data.error}: ${data.detail ?? ''}`)
@@ -123,10 +146,7 @@ export async function gradePronunciation(
 
   const { data, error } = await supabase.functions.invoke('tutor', { body })
   if (error) {
-    const msg = error.message ?? String(error)
-    // FunctionsFetchError → not deployed / offline; FunctionsHttpError → server error
-    const kind = /fetch/i.test(error.name ?? '') ? 'unavailable' : 'failed'
-    throw new TutorError(kind, msg)
+    throw await toTutorError(error)
   }
   if (data?.error) {
     throw new TutorError('failed', `${data.error}: ${data.detail ?? ''}`)
