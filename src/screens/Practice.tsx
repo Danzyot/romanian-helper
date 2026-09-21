@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { categories, dictionary, type Entry } from '../data/dictionary'
+import { passages } from '../data/texts'
 import type { Lang, Strings } from '../i18n'
 import { search, looksRomanian } from '../lib/search'
 import { pickWords, recordPractice, unlockedTier } from '../lib/progress'
@@ -54,6 +55,8 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Entry | null>(null)
   const [category, setCategory] = useState<string | null>(null)
+  const [readMode, setReadMode] = useState(false)
+  const [readText, setReadText] = useState('')
   const [grading, setGrading] = useState(false)
   const [grade, setGrade] = useState<GradeResult | null>(null)
   const [tutorNote, setTutorNote] = useState<string | null>(null)
@@ -74,6 +77,7 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
   const choose = (entry: Entry) => {
     setSelected(entry)
     setQuery('')
+    setReadMode(false)
     setGrade(null)
     setTutorNote(null)
     recorder.reset()
@@ -158,16 +162,22 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
         </div>
       ) : selected ? (
         <div className="card wordcard">
-          <p className="word" lang="ro">
+          <p
+            className={selected.ro.length > 60 ? 'word word-long' : 'word'}
+            lang="ro"
+            dir="ltr"
+          >
             {selected.ro}
           </p>
           {translation(selected) && (
             <p className="translation">{translation(selected)}</p>
           )}
-          <p className="hint">
-            {s.soundsLike}:{' '}
-            <span dir="ltr">{selected.hint ?? roHint(selected.ro)}</span>
-          </p>
+          {selected.ro.length <= 60 && (
+            <p className="hint">
+              {s.soundsLike}:{' '}
+              <span dir="ltr">{selected.hint ?? roHint(selected.ro)}</span>
+            </p>
+          )}
 
           <div className="listen-row">
             <button className="btn listen" onClick={() => speakRomanian(selected.ro)}>
@@ -267,6 +277,43 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
             {s.backToSearch}
           </button>
         </div>
+      ) : readMode ? (
+        <div className="card read-aloud">
+          <h2>{s.readAloudTitle}</h2>
+          <p className="quiz-intro">{s.readAloudHelp}</p>
+          <textarea
+            className="read-textarea"
+            dir="ltr"
+            lang="ro"
+            rows={5}
+            maxLength={600}
+            value={readText}
+            placeholder={s.readAloudPlaceholder}
+            onChange={(e) => setReadText(e.target.value)}
+          />
+          <button
+            className="btn record"
+            disabled={readText.trim().length < 2}
+            onClick={() => choose(customEntry(readText.trim()))}
+          >
+            {s.readAloudStart}
+          </button>
+          <p className="quiz-intro">{s.readAloudPick}</p>
+          <div className="read-picks">
+            {passages.map((p) => (
+              <button
+                key={p.id}
+                className="btn subtle read-pick"
+                onClick={() => choose(customEntry(p.ro))}
+              >
+                {p.ro.slice(0, 48)}…
+              </button>
+            ))}
+          </div>
+          <button className="btn subtle" onClick={() => setReadMode(false)}>
+            {s.backToSearch}
+          </button>
+        </div>
       ) : category ? (
         <div className="suggestions">
           <div className="chips-row">
@@ -280,6 +327,9 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
         <div className="suggestions">
           <h2>{s.suggestedToday}</h2>
           {wordList(suggestions)}
+          <button className="btn subtle" onClick={() => setReadMode(true)}>
+            {s.readAloudBtn}
+          </button>
           <h2>{s.browseAll}</h2>
           <div className="chips-row wrap">
             {categories.map((c) => (

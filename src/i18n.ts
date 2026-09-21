@@ -23,6 +23,13 @@ const strings = {
     suggestedToday: 'For today',
     browseAll: 'Browse by topic',
     allWords: 'All',
+    readAloudBtn: '📖 Read a text aloud',
+    readAloudTitle: 'Read aloud',
+    readAloudHelp:
+      'Paste or type any Romanian text, read it out loud, and every word gets checked.',
+    readAloudPlaceholder: 'Paste or type Romanian text here…',
+    readAloudStart: 'Practice this text',
+    readAloudPick: 'Or pick a text:',
     // practice card
     soundsLike: 'Sounds like',
     listen: 'Listen',
@@ -159,6 +166,13 @@ const strings = {
     suggestedToday: 'להיום',
     browseAll: 'עיון לפי נושא',
     allWords: 'הכול',
+    readAloudBtn: '📖 קריאת טקסט בקול',
+    readAloudTitle: 'קריאה בקול',
+    readAloudHelp:
+      'הדביקי או הקלידי טקסט ברומנית, קראי אותו בקול, וכל מילה תיבדק.',
+    readAloudPlaceholder: '...הדביקי או הקלידי כאן טקסט ברומנית',
+    readAloudStart: 'לתרגל את הטקסט הזה',
+    readAloudPick: ':או בחרי טקסט',
     soundsLike: 'נשמע כמו',
     listen: 'האזיני',
     listenSlow: 'לאט',

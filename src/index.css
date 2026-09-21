@@ -942,3 +942,39 @@ input:focus-visible {
   font-size: 0.92rem;
   color: var(--ink-soft);
 }
+
+/* ——— read-aloud mode ——— */
+.word-long {
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: start;
+}
+
+.read-aloud {
+  text-align: center;
+}
+
+.read-textarea {
+  border: 1.5px solid var(--card-line);
+  border-radius: 6px;
+  background: var(--paper);
+  padding: 0.8rem 0.9rem;
+  font-size: 1.05rem;
+  font-family: var(--serif);
+  color: var(--ink);
+  resize: vertical;
+  width: 100%;
+}
+
+.read-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.read-pick {
+  font-family: var(--serif);
+  text-align: start;
+  direction: ltr;
+}
