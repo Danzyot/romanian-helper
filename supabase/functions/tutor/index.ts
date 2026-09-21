@@ -85,6 +85,69 @@ interface CoachVerdict {
   tip: string
 }
 
+/**
+ * Call Gemini with retries and a fallback model. The free tier rate-limits
+ * briefly (429) under quick successive turns; 5xx happens occasionally.
+ * Returns the parsed JSON object from the model's reply.
+ */
+async function geminiJson(
+  parts: unknown[],
+  temperature: number,
+  key: string,
+): Promise<Record<string, unknown>> {
+  const models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+  let lastError = 'gemini: no attempt made'
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let res: Response
+      try {
+        res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts }],
+              generationConfig: { responseMimeType: 'application/json', temperature },
+            }),
+          },
+        )
+      } catch (e) {
+        lastError = `gemini ${model}: ${String((e as Error).message)}`
+        await new Promise((r) => setTimeout(r, 700))
+        continue
+      }
+      if (!res.ok) {
+        lastError = `gemini ${model} ${res.status}: ${(await res.text()).slice(0, 200)}`
+        if (res.status === 429 || res.status >= 500) {
+          await new Promise((r) => setTimeout(r, 900 * (attempt + 1)))
+          continue // retry same model
+        }
+        break // other 4xx: try the next model
+      }
+      const data = await res.json()
+      const text: string =
+        data.candidates?.[0]?.content?.parts
+          ?.map((p: { text?: string }) => p.text ?? '')
+          .join('') ?? ''
+      // tolerate markdown fences or stray prose around the JSON
+      const start = text.indexOf('{')
+      const end = text.lastIndexOf('}')
+      if (start === -1 || end <= start) {
+        lastError = `gemini ${model}: no JSON in reply`
+        continue
+      }
+      try {
+        return JSON.parse(text.slice(start, end + 1))
+      } catch {
+        lastError = `gemini ${model}: invalid JSON`
+        continue // retry
+      }
+    }
+  }
+  throw new Error(lastError)
+}
+
 async function coach(
   b64Audio: string,
   mimeType: string,
@@ -103,34 +166,11 @@ Scoring guide: 90-100 near-native; 70-89 clearly understandable with an accent; 
 Respond with ONLY this JSON (no markdown, no extra text):
 {"score": <0-100>, "words": [{"word": "<each word of the target>", "ok": <true|false>, "issue": "<if not ok: what went wrong, in ${tipLang}, max 8 words>"}], "tip": "<the single most useful, encouraging tip in ${tipLang}, max 25 words>"}`
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mimeType, data: b64Audio } },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.3,
-        },
-      }),
-    },
+  const parsed = await geminiJson(
+    [{ text: prompt }, { inline_data: { mime_type: mimeType, data: b64Audio } }],
+    0.3,
+    key,
   )
-  if (!res.ok) {
-    throw new Error(`gemini ${res.status}: ${(await res.text()).slice(0, 300)}`)
-  }
-  const data = await res.json()
-  const text: string =
-    data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? ''
-  const parsed = JSON.parse(text)
   return {
     score: Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0))),
     words: Array.isArray(parsed.words)
@@ -179,24 +219,7 @@ Respond with ONLY this JSON (no markdown):
     })
   }
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0.7 },
-      }),
-    },
-  )
-  if (!res.ok) {
-    throw new Error(`gemini ${res.status}: ${(await res.text()).slice(0, 300)}`)
-  }
-  const data = await res.json()
-  const text: string =
-    data.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? ''
-  const parsed = JSON.parse(text)
+  const parsed = await geminiJson(parts, 0.7, key)
   return {
     reply: String(parsed.reply ?? ''),
     translation: String(parsed.translation ?? ''),
