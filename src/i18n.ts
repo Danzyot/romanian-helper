@@ -11,7 +11,7 @@ const strings = {
     tabProgress: 'Progress',
     // conversation
     talkIntro:
-      'Talk with Ana, your Romanian tutor! Tap the microphone and say something — "Bună!" is a great start. She answers out loud in simple Romanian and gently corrects mistakes.',
+      'Talk with Ana, your Romanian tutor! Speak or type in Romanian, English, or Hebrew — practice conversation, or ask her anything ("how do I say...?", "how is ș pronounced?"). She remembers what you tell her.',
     talkThinking: 'Ana is listening…',
     talkSpeak: 'Speak',
     talkTypePlaceholder: '…or type in Romanian',
@@ -148,7 +148,7 @@ const strings = {
     tabQuiz: 'חידונים',
     tabProgress: 'התקדמות',
     talkIntro:
-      'דברי עם אנה, המורה שלך לרומנית! לחצי על המיקרופון ואמרי משהו — "Bună!‎" זו התחלה מצוינת. היא עונה בקול ברומנית פשוטה ומתקנת טעויות בעדינות.',
+      'דברי עם אנה, המורה שלך לרומנית! דברי או הקלידי ברומנית, אנגלית או עברית — תרגלי שיחה, או שאלי אותה כל דבר ("איך אומרים...?", "איך מבטאים ș?"). היא זוכרת מה שמספרים לה.',
     talkThinking: '...אנה מקשיבה',
     talkSpeak: 'דברי',
     talkTypePlaceholder: 'או הקלידי ברומנית...',

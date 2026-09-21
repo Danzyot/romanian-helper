@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Lang, Strings } from '../i18n'
+import { addFact, loadFacts, saveFacts } from '../lib/memory'
 import { recordOutcome } from '../lib/progress'
 import { converseTurn, TutorError, type ChatTurn } from '../lib/tutor'
-import { speakRomanian } from '../speak'
+import { speakFeedback, speakRomanian } from '../speak'
 import { useRecorder } from '../useRecorder'
 
 interface Props {
@@ -15,13 +16,25 @@ export default function Talk({ lang, s }: Props) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [typed, setTyped] = useState('')
+  const factsRef = useRef<string[]>([])
   const recorder = useRecorder()
   const sentBlobRef = useRef<Blob | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    void loadFacts().then((facts) => {
+      factsRef.current = facts
+    })
+  }, [])
+
+  useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [turns, busy])
+
+  const speakReply = (text: string, replyLang: 'ro' | 'en' | 'he') => {
+    if (replyLang === 'ro') speakRomanian(text)
+    else speakFeedback(text, replyLang)
+  }
 
   const send = async (input: { audio: Blob } | { text: string }) => {
     setBusy(true)
@@ -30,7 +43,7 @@ export default function Talk({ lang, s }: Props) {
     // optimistic user bubble; replaced with the transcript once known
     setTurns((t) => [...t, { role: 'user', text: pendingText }])
     try {
-      const result = await converseTurn(input, turns, lang)
+      const result = await converseTurn(input, turns, factsRef.current, lang)
       setTurns((t) => {
         const copy = [...t]
         copy[copy.length - 1] = {
@@ -38,11 +51,23 @@ export default function Talk({ lang, s }: Props) {
           text: result.transcript ?? pendingText,
           note: result.correction ?? undefined,
         }
-        copy.push({ role: 'tutor', text: result.reply, note: result.translation })
+        copy.push({
+          role: 'tutor',
+          text: result.reply,
+          note: result.translation ?? undefined,
+          replyLang: result.replyLang,
+        })
         return copy
       })
+      if (result.remember) {
+        const next = addFact(factsRef.current, result.remember)
+        if (next !== factsRef.current) {
+          factsRef.current = next
+          void saveFacts(next)
+        }
+      }
       recordOutcome(true)
-      speakRomanian(result.reply)
+      speakReply(result.reply, result.replyLang)
     } catch (err: unknown) {
       setTurns((t) => t.slice(0, -1))
       if (err instanceof TutorError && err.kind === 'auth') setNote(s.tutorSignIn)
@@ -85,9 +110,7 @@ export default function Talk({ lang, s }: Props) {
         {turns.map((t, i) => (
           <div key={i} className={`bubble-row ${t.role}`}>
             <div className={`bubble ${t.role}`}>
-              <p lang="ro" dir="ltr">
-                {t.text}
-              </p>
+              <p dir="auto">{t.text}</p>
               {t.note && (
                 <p className={t.role === 'user' ? 'bubble-correction' : 'bubble-translation'}>
                   {t.note}
@@ -97,7 +120,7 @@ export default function Talk({ lang, s }: Props) {
                 <button
                   className="bubble-replay"
                   aria-label={s.listen}
-                  onClick={() => speakRomanian(t.text)}
+                  onClick={() => speakReply(t.text, t.replyLang ?? 'ro')}
                 >
                   🔊
                 </button>

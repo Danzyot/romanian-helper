@@ -37,6 +37,8 @@ interface ConverseRequest {
   text?: string
   /** prior turns, oldest first, capped by the client */
   history: { role: 'user' | 'tutor'; text: string }[]
+  /** long-term facts about the learner, managed by the client */
+  facts?: string[]
   feedbackLang: 'en' | 'he'
 }
 
@@ -60,12 +62,13 @@ async function transcribe(
   bytes: Uint8Array,
   mimeType: string,
   key: string,
+  language?: string,
 ): Promise<string> {
   const ext = mimeType.includes('mp4') ? 'mp4' : 'webm'
   const form = new FormData()
   form.append('file', new File([bytes], `audio.${ext}`, { type: mimeType }))
   form.append('model', 'whisper-1')
-  form.append('language', 'ro')
+  if (language) form.append('language', language)
   form.append('temperature', '0')
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -83,6 +86,7 @@ interface CoachVerdict {
   score: number
   words: { word: string; ok: boolean; issue?: string }[]
   tip: string
+  heard?: string
 }
 
 /**
@@ -171,7 +175,7 @@ Grade the pronunciation. Be lenient about a foreign accent, but attentive to gen
 Scoring guide: 90-100 near-native; 70-89 clearly understandable with an accent; 50-69 partly understandable, one or more real errors; below 50 hard to recognize.
 
 Respond with ONLY this JSON (no markdown, no extra text):
-{"score": <0-100>, "words": [{"word": "<each word of the target>", "ok": <true|false>, "issue": "<if not ok: what went wrong, in ${tipLang}, max 8 words>"}], "tip": "<the single most useful, encouraging tip in ${tipLang}, max 25 words>"}`
+{"score": <0-100>, "words": [{"word": "<each word of the target>", "ok": <true|false>, "issue": "<if not ok: what went wrong, in ${tipLang}, max 8 words>"}], "tip": "<the single most useful, encouraging tip in ${tipLang}, max 25 words>", "heard": "<what the student actually said, in Romanian spelling>"}`
 
   const parsed = await geminiJson(
     [{ text: prompt }, { inline_data: { mime_type: mimeType, data: b64Audio } }],
@@ -188,13 +192,17 @@ Respond with ONLY this JSON (no markdown, no extra text):
         }))
       : [],
     tip: String(parsed.tip ?? ''),
+    heard: parsed.heard ? String(parsed.heard) : undefined,
   }
 }
 
 interface ConverseReply {
+  heard: string | null
   reply: string
-  translation: string
+  replyLang: 'ro' | 'en' | 'he'
+  translation: string | null
   correction: string | null
+  remember: string | null
 }
 
 async function converse(
@@ -206,16 +214,26 @@ async function converse(
     .slice(-12)
     .map((t) => `${t.role === 'user' ? 'Student' : 'You'}: ${t.text}`)
     .join('\n')
+  const factsText = (req.facts ?? []).slice(-40).map((f) => `- ${f}`).join('\n')
 
-  const prompt = `You are Ana, a warm Romanian tutor having a spoken conversation with an adult beginner (her other languages are English and Hebrew). Keep the conversation going naturally: react to what she said, then ask ONE simple follow-up question. Use very simple A1-level Romanian, short sentences (max 15 words total).
+  const prompt = `You are Ana, a warm private Romanian tutor for an adult beginner. Her other languages are English and Hebrew, and she may speak or type in any of the three.
+
+What you know about her from earlier conversations (long-term memory):
+${factsText || '(nothing yet)'}
 
 Conversation so far:
-${historyText || '(the conversation is just starting — greet her and ask something easy)'}
+${historyText || '(the conversation is just starting — greet her warmly, use what you know about her, and ask something easy)'}
 
 Student's new turn: ${req.audio ? '(attached as audio — listen to it yourself)' : `"${req.text ?? ''}"`}
 
+How to behave:
+- When she is conversing in Romanian, reply in very simple A1-level Romanian, short (max 15 words), react warmly to what she said, and end with ONE simple question.
+- When she asks a question or asks for help — in any language (e.g. how to pronounce or say something, what a word means, a grammar question) — answer as a helpful tutor in ${tipLang}: give the Romanian word(s), a "sounds like" hint written for ${tipLang} readers, a short example, then invite her back into Romanian.
+- Use her personal facts naturally when relevant (her name, pets, family, interests).
+- If her turn had a clear error (grammar, word choice${req.audio ? ', pronunciation you heard' : ''}), add a short friendly correction.
+
 Respond with ONLY this JSON (no markdown):
-{"reply": "<your Romanian reply, simple, ending with a question>", "translation": "<translation of your reply in ${tipLang}>", "correction": <if her turn had a clear error (grammar, word choice${req.audio ? ', pronunciation you heard' : ''}), a SHORT friendly note in ${tipLang} showing the right way, else null>}`
+{"heard": ${req.audio ? '"<exactly what she said, written in the language she spoke>"' : 'null'}, "reply": "<your reply>", "replyLang": "<ro|en|he — the main language of your reply>", "translation": <if the reply is Romanian, its ${tipLang} translation, else null>, "correction": <short friendly note in ${tipLang}, else null>, "remember": <ONE new lasting personal fact she shared this turn (a name, pet, family member, preference), phrased as a short English sentence, else null>}`
 
   const parts: unknown[] = [{ text: prompt }]
   if (req.audio) {
@@ -225,10 +243,14 @@ Respond with ONLY this JSON (no markdown):
   }
 
   const parsed = await geminiJson(parts, 0.7, key)
+  const replyLang = parsed.replyLang === 'en' || parsed.replyLang === 'he' ? parsed.replyLang : 'ro'
   return {
+    heard: parsed.heard ? String(parsed.heard) : null,
     reply: String(parsed.reply ?? ''),
-    translation: String(parsed.translation ?? ''),
+    replyLang,
+    translation: parsed.translation ? String(parsed.translation) : null,
     correction: parsed.correction ? String(parsed.correction) : null,
+    remember: parsed.remember ? String(parsed.remember) : null,
   }
 }
 
@@ -299,7 +321,7 @@ Deno.serve(async (req) => {
   // Run both AI calls in parallel; report partial results if one fails.
   const bytes = base64ToBytes(body.audio)
   const [tr, co] = await Promise.allSettled([
-    transcribe(bytes, mimeType, openaiKey),
+    transcribe(bytes, mimeType, openaiKey, 'ro'),
     coach(body.audio, mimeType, body.target, feedbackLang, geminiKey),
   ])
 

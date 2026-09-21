@@ -32,3 +32,16 @@ create policy "own word_stats" on public.word_stats
 drop policy if exists "own activity_days" on public.activity_days;
 create policy "own activity_days" on public.activity_days
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Ana's long-term memory: personal facts the tutor learns in conversation.
+create table if not exists public.tutor_memory (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  facts      jsonb not null default '[]',
+  updated_at timestamptz not null default now()
+);
+
+alter table public.tutor_memory enable row level security;
+
+drop policy if exists "own tutor_memory" on public.tutor_memory;
+create policy "own tutor_memory" on public.tutor_memory
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);

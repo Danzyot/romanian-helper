@@ -82,18 +82,23 @@ export interface ChatTurn {
   text: string
   /** translation of a tutor turn, or correction note on a user turn */
   note?: string
+  /** language of a tutor turn, for choosing the speech voice */
+  replyLang?: 'ro' | 'en' | 'he'
 }
 
 export interface ConverseResult {
   transcript: string | null
   reply: string
-  translation: string
+  replyLang: 'ro' | 'en' | 'he'
+  translation: string | null
   correction: string | null
+  remember: string | null
 }
 
 export async function converseTurn(
   input: { audio: Blob } | { text: string },
   history: ChatTurn[],
+  facts: string[],
   feedbackLang: 'en' | 'he',
 ): Promise<ConverseResult> {
   const { data: sessionData } = await supabase.auth.getSession()
@@ -102,6 +107,7 @@ export async function converseTurn(
   const body: Record<string, unknown> = {
     action: 'converse',
     history: history.slice(-12).map(({ role, text }) => ({ role, text })),
+    facts: facts.slice(-40),
     feedbackLang,
   }
   if ('audio' in input) {
@@ -118,11 +124,16 @@ export async function converseTurn(
   if (data?.error) {
     throw new TutorError('failed', `${data.error}: ${data.detail ?? ''}`)
   }
+  const replyLang =
+    data.replyLang === 'en' || data.replyLang === 'he' ? data.replyLang : 'ro'
   return {
-    transcript: data.transcript ?? null,
+    // Whisper transcript when it worked; otherwise what Ana herself heard
+    transcript: data.transcript ?? data.heard ?? null,
     reply: String(data.reply ?? ''),
-    translation: String(data.translation ?? ''),
+    replyLang,
+    translation: data.translation ? String(data.translation) : null,
     correction: data.correction ? String(data.correction) : null,
+    remember: data.remember ? String(data.remember) : null,
   }
 }
 
@@ -152,12 +163,14 @@ export async function gradePronunciation(
     throw new TutorError('failed', `${data.error}: ${data.detail ?? ''}`)
   }
 
-  const transcript: string | null = data.transcript ?? null
+  const whisper: string | null = data.transcript ?? null
   const verdict = data.verdict as
-    | { score: number; words: GradedWord[]; tip: string }
+    | { score: number; words: GradedWord[]; tip: string; heard?: string }
     | null
+  // Whisper is the objective check; Ana's own hearing fills in for display.
+  const transcript = whisper ?? verdict?.heard ?? null
 
-  const understood = transcript !== null ? transcriptMatches(transcript, target) : null
+  const understood = whisper !== null ? transcriptMatches(whisper, target) : null
 
   let score = verdict?.score ?? (understood ? 78 : 40)
   // If the recognizer clearly understood her, don't let the coach be too harsh.
