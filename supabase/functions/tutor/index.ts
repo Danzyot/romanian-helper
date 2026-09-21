@@ -100,7 +100,8 @@ async function geminiJson(
   key: string,
 ): Promise<Record<string, unknown>> {
   // "-latest" aliases always point at a live model; dated names get retired.
-  const models = ['gemini-flash-latest', 'gemini-2.5-flash']
+  // flash-lite has a separate quota pool — a real fallback when 429s hit.
+  const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest']
   const errors: string[] = []
 
   const attempt = async (model: string, withThinkingOff: boolean): Promise<Record<string, unknown> | { retryable: boolean; thinkingRejected?: boolean }> => {
