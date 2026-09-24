@@ -3,6 +3,8 @@ import type { Lang, Strings } from '../i18n'
 import { addFact, loadFacts, saveFacts } from '../lib/memory'
 import { recordOutcome } from '../lib/progress'
 import { converseTurn, TutorError, type ChatTurn } from '../lib/tutor'
+import { logEvent } from '../lib/telemetry'
+import FeedbackPrompt from './FeedbackPrompt'
 import { speakFeedback, speakRomanian } from '../speak'
 import { useRecorder } from '../useRecorder'
 
@@ -67,6 +69,7 @@ export default function Talk({ lang, s }: Props) {
         }
       }
       recordOutcome(true)
+      logEvent('talk_turn', { voice: 'audio' in input, corrected: !!result.correction })
       speakReply(result.reply, result.replyLang)
     } catch (err: unknown) {
       setTurns((t) => t.slice(0, -1))
@@ -130,6 +133,9 @@ export default function Talk({ lang, s }: Props) {
         ))}
         {busy && <p className="grading-note">🎧 {s.talkThinking}</p>}
         {note && <p className="notice">{note}</p>}
+        {turns.filter((t) => t.role === 'tutor').length >= 6 && (
+          <FeedbackPrompt context="talk" s={s} />
+        )}
         <div ref={endRef} />
       </div>
 

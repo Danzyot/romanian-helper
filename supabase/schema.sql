@@ -45,3 +45,21 @@ alter table public.tutor_memory enable row level security;
 drop policy if exists "own tutor_memory" on public.tutor_memory;
 create policy "own tutor_memory" on public.tutor_memory
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Usage + feedback: what gets used, and the little "was this helpful?" answers.
+create table if not exists public.usage_events (
+  id      bigint generated always as identity primary key,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  ts      timestamptz not null default now(),
+  kind    text not null,
+  detail  jsonb not null default '{}'
+);
+
+create index if not exists usage_events_user_ts
+  on public.usage_events (user_id, ts desc);
+
+alter table public.usage_events enable row level security;
+
+drop policy if exists "own usage_events" on public.usage_events;
+create policy "own usage_events" on public.usage_events
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);

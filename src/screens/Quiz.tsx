@@ -17,6 +17,8 @@ import {
   checkWritten,
 } from '../lib/answers'
 import { gradePronunciation, TutorError } from '../lib/tutor'
+import { logEvent } from '../lib/telemetry'
+import FeedbackPrompt from './FeedbackPrompt'
 import { speakRomanian } from '../speak'
 import { useRecorder } from '../useRecorder'
 
@@ -335,6 +337,18 @@ export default function Quiz({ lang, s }: Props) {
   const [speakNote, setSpeakNote] = useState<string | null>(null)
   const recorder = useRecorder()
   const gradedBlobRef = useRef<Blob | null>(null)
+  const loggedRef = useRef(false)
+
+  // log a finished round once
+  const finishedRound = mode !== null && questions.length > 0 && index >= questions.length
+  useEffect(() => {
+    if (finishedRound && !loggedRef.current) {
+      loggedRef.current = true
+      logEvent('quiz_done', { mode, correct: correctCount, total: questions.length })
+    }
+    if (!finishedRound) loggedRef.current = false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finishedRound])
 
   // grade a spoken-conjugation recording when it lands
   useEffect(() => {
@@ -425,6 +439,7 @@ export default function Quiz({ lang, s }: Props) {
       <div className="card quiz-cover">
         <h2>{s.quizDoneTitle}</h2>
         <p className="quiz-score">{s.quizScore(correctCount, questions.length)}</p>
+        <FeedbackPrompt context={`quiz:${mode}`} s={s} />
         <button className="btn record" onClick={() => start(mode)}>
           {s.quizAgain}
         </button>

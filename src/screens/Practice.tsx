@@ -7,6 +7,8 @@ import { pickWords, recordPractice, unlockedTier } from '../lib/progress'
 import { roHint } from '../lib/roHint'
 import { getSettings } from '../lib/settings'
 import { gradePronunciation, TutorError, type GradeResult } from '../lib/tutor'
+import { logEvent } from '../lib/telemetry'
+import FeedbackPrompt from './FeedbackPrompt'
 import { speakFeedback, speakRomanian } from '../speak'
 import { useRecorder } from '../useRecorder'
 
@@ -98,6 +100,11 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
         setGrade(result)
         if (wordId) recordPractice(wordId, result.score)
         if (result.tip) speakFeedback(result.tip, lang)
+        logEvent('practice_grade', {
+          score: result.score,
+          custom: wordId === null,
+          words: selected.ro.split(/\s+/).length,
+        })
       })
       .catch((err: unknown) => {
         if (wordId) recordPractice(wordId)
@@ -265,6 +272,7 @@ export default function Practice({ lang, s, voiceMissing }: Props) {
                   </button>
                 </p>
               )}
+              <FeedbackPrompt context="pronunciation" s={s} />
             </div>
           )}
 

@@ -3,6 +3,7 @@ import { t, type Lang } from './i18n'
 import { hasRomanianVoice } from './speak'
 import { effectiveLevel } from './lib/progress'
 import { getSettings } from './lib/settings'
+import { logEvent } from './lib/telemetry'
 import Practice from './screens/Practice'
 import Talk from './screens/Talk'
 import Quiz from './screens/Quiz'
@@ -26,6 +27,15 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('romanian-helper:lang', lang)
   }, [lang])
+
+  useEffect(() => {
+    logEvent('app_open')
+  }, [])
+
+  const switchTab = (next: Tab) => {
+    setTab(next)
+    logEvent('tab', { tab: next })
+  }
 
   // Voices load asynchronously; check once they had a chance to arrive.
   useEffect(() => {
@@ -86,28 +96,28 @@ export default function App() {
       <nav className="tabs">
         <button
           className={tab === 'practice' ? 'tab on' : 'tab'}
-          onClick={() => setTab('practice')}
+          onClick={() => switchTab('practice')}
         >
           <span aria-hidden>🗣</span>
           {s.tabPractice}
         </button>
         <button
           className={tab === 'talk' ? 'tab on' : 'tab'}
-          onClick={() => setTab('talk')}
+          onClick={() => switchTab('talk')}
         >
           <span aria-hidden>💬</span>
           {s.tabTalk}
         </button>
         <button
           className={tab === 'quiz' ? 'tab on' : 'tab'}
-          onClick={() => setTab('quiz')}
+          onClick={() => switchTab('quiz')}
         >
           <span aria-hidden>✏️</span>
           {s.tabQuiz}
         </button>
         <button
           className={tab === 'progress' ? 'tab on' : 'tab'}
-          onClick={() => setTab('progress')}
+          onClick={() => switchTab('progress')}
         >
           <span aria-hidden>📈</span>
           {s.tabProgress}
