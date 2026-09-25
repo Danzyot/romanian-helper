@@ -1,18 +1,12 @@
 import { supabase } from './sync'
 
-/** Admin-only app settings stored in app_config (RLS: admins write, users read). */
+/** App-wide settings stored in app_config; any signed-in user can change them. */
 
 export type ConfigKey = 'realtime_model' | 'realtime_voice' | 'gemini_model'
 
-export async function isAdmin(): Promise<boolean> {
+export async function isSignedIn(): Promise<boolean> {
   const { data: s } = await supabase.auth.getSession()
-  if (!s.session) return false
-  const { data } = await supabase
-    .from('app_admins')
-    .select('user_id')
-    .eq('user_id', s.session.user.id)
-    .maybeSingle()
-  return !!data
+  return !!s.session
 }
 
 export async function loadConfig(): Promise<Partial<Record<ConfigKey, string>>> {

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { isAdmin, loadConfig, saveConfig, type ConfigKey } from '../lib/admin'
+import { isSignedIn, loadConfig, saveConfig, type ConfigKey } from '../lib/admin'
 
 /**
- * Model switcher, rendered only for accounts listed in app_admins.
- * English-only on purpose: this panel is for the app's maintainer.
+ * Model switcher for any signed-in user. English-only on purpose: it's a
+ * maintenance setting, not part of the lessons.
  */
 
 const CUSTOM = '__custom__'
@@ -56,7 +56,7 @@ export default function AdminPanel() {
 
   useEffect(() => {
     void (async () => {
-      if (!(await isAdmin())) return
+      if (!(await isSignedIn())) return
       const cfg = await loadConfig()
       setValues(cfg)
       const c: Partial<Record<ConfigKey, boolean>> = {}
@@ -80,8 +80,8 @@ export default function AdminPanel() {
 
   return (
     <section className="settings-section admin-section">
-      <h3>🔧 Admin: AI models</h3>
-      <p className="settings-help">Only your account sees this. Changes apply to everyone immediately, with no redeploy.</p>
+      <h3>🔧 AI models (advanced)</h3>
+      <p className="settings-help">Applies to every account using the app, starting with the next call or turn. No redeploy needed.</p>
       {FIELDS.map((f) => {
         const current = values[f.key] ?? ''
         const isCustom = custom[f.key]
