@@ -14,6 +14,8 @@ export interface CallHandlers {
   onStatus: (status: CallStatus, detail?: string) => void
   /** create-or-update a caption; `append` adds to existing text */
   onCaption: (id: string, role: 'user' | 'tutor', text: string, append: boolean) => void
+  /** a caption is final; good moment to translate it */
+  onCaptionDone: (id: string, role: 'user' | 'tutor', text: string) => void
   onSpeaking: (who: 'user' | 'tutor' | null) => void
   onRemember: (fact: string) => void
 }
@@ -129,6 +131,7 @@ export async function startLiveCall(
       case 'conversation.item.input_audio_transcription.completed': {
         const text = cleanUserCaption(ev.transcript ?? '')
         h.onCaption(ev.item_id, 'user', text ?? '🎤', false)
+        if (text) h.onCaptionDone(ev.item_id, 'user', text)
         break
       }
       case 'output_audio_buffer.started':
@@ -141,6 +144,10 @@ export async function startLiveCall(
       case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
         if (ev.item_id && ev.delta) h.onCaption(ev.item_id, 'tutor', ev.delta, true)
+        break
+      case 'response.output_audio_transcript.done':
+      case 'response.audio_transcript.done':
+        if (ev.item_id && ev.transcript) h.onCaptionDone(ev.item_id, 'tutor', ev.transcript)
         break
       case 'response.function_call_arguments.done':
         if (ev.name === 'remember_fact') {

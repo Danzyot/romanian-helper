@@ -80,14 +80,17 @@ function markWordsFromTranscript(target: string, transcript: string | null): Gra
 export interface ChatTurn {
   role: 'user' | 'tutor'
   text: string
-  /** translation of a tutor turn, or correction note on a user turn */
-  note?: string
+  /** Hebrew translation, when the text is Romanian */
+  translation?: string
+  /** correction note on a user turn */
+  correction?: string
   /** language of a tutor turn, for choosing the speech voice */
   replyLang?: 'ro' | 'en' | 'he'
 }
 
 export interface ConverseResult {
   transcript: string | null
+  heardTranslation: string | null
   reply: string
   replyLang: 'ro' | 'en' | 'he'
   translation: string | null
@@ -129,6 +132,7 @@ export async function converseTurn(
   return {
     // Whisper transcript when it worked; otherwise what Ana herself heard
     transcript: data.transcript ?? data.heard ?? null,
+    heardTranslation: data.heardTranslation ? String(data.heardTranslation) : null,
     reply: String(data.reply ?? ''),
     replyLang,
     translation: data.translation ? String(data.translation) : null,
@@ -188,4 +192,15 @@ export async function gradePronunciation(
     words,
     tip: verdict?.tip ?? '',
   }
+}
+
+/** Hebrew translations for Romanian lines (null for non-Romanian lines). */
+export async function translateToHebrew(texts: string[]): Promise<(string | null)[]> {
+  const { data, error } = await supabase.functions.invoke('tutor', {
+    body: { action: 'translate', texts },
+  })
+  if (error || data?.error || !Array.isArray(data?.translations)) {
+    return texts.map(() => null)
+  }
+  return texts.map((_, i) => (data.translations[i] ? String(data.translations[i]) : null))
 }

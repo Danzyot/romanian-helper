@@ -1174,3 +1174,15 @@ input:focus-visible {
   color: var(--ink-faint);
   font-size: 0.8rem;
 }
+
+/* ——— Hebrew translations under messages ——— */
+.bubble.user .bubble-translation {
+  color: rgba(255, 253, 248, 0.82);
+}
+
+.cap-he {
+  margin-top: 0.25rem;
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  opacity: 0.8;
+}

@@ -42,7 +42,31 @@ interface ConverseRequest {
   feedbackLang: 'en' | 'he'
 }
 
-type TutorRequest = GradeRequest | ConverseRequest | RealtimeRequest
+type TutorRequest = GradeRequest | ConverseRequest | RealtimeRequest | TranslateRequest
+
+interface TranslateRequest {
+  action: 'translate'
+  texts: string[]
+  feedbackLang: 'en' | 'he'
+}
+
+/** Hebrew translations for Romanian lines; non-Romanian lines map to null. */
+async function translateToHebrew(
+  texts: string[],
+  key: string,
+  preferred?: string,
+): Promise<(string | null)[]> {
+  const lines = texts.slice(0, 10).map((t) => String(t).slice(0, 600))
+  const prompt = `Translate each Romanian line into natural Hebrew. If a line is not Romanian (for example it is already Hebrew or English), return null for it.
+
+Lines (JSON array):
+${JSON.stringify(lines)}
+
+Respond with ONLY this JSON: {"translations": [<Hebrew string or null, one per line, same order>]}`
+  const parsed = await geminiJson([{ text: prompt }], 0.2, key, preferred ?? 'gemini-flash-lite-latest')
+  const out = Array.isArray(parsed.translations) ? parsed.translations : []
+  return lines.map((_, i) => (out[i] ? String(out[i]) : null))
+}
 
 /** Admin-set overrides from the app_config table (see supabase/schema.sql). */
 type AppConfig = Partial<Record<'realtime_model' | 'realtime_voice' | 'gemini_model', string>>
@@ -91,7 +115,7 @@ On this call:
 - Mostly speak simple Romanian at her level: short sentences, slowly and clearly, one question at a time. Keep each turn brief (1-3 sentences) so she does most of the talking.
 - Listen closely to her pronunciation every time she speaks Romanian. If a word was clearly mispronounced (wrong sound such as ș, ț, ă, â/î, ce/ci, ge/gi; wrong stress; a missing syllable), kindly correct it: say the word correctly and slowly, and ask her to repeat it. If she pronounced it well, do not invent problems; praise her now and then instead.
 - Gently fix grammar or word-choice mistakes by repeating her sentence the correct way.
-- If she asks something in English or Hebrew (how to say or pronounce something, what a word means, a grammar question), answer briefly in ${tipLang}, say the Romanian slowly, then invite her back into Romanian.
+- She may switch language mid-call. If she asks something in Hebrew, answer in Hebrew; if in English, answer in English (how to say or pronounce something, what a word means, a grammar question). Keep it brief, say the Romanian slowly, then invite her back into Romanian.
 - If she seems lost, switch to ${tipLang} for a moment to help, then return to Romanian.
 - Whenever she shares a lasting personal fact (names, pets, family, interests, plans), call remember_fact with a short English sentence, and keep talking naturally. Never mention that you are saving it.`
 }
@@ -341,6 +365,7 @@ Respond with ONLY this JSON (no markdown, no extra text):
 
 interface ConverseReply {
   heard: string | null
+  heardTranslation: string | null
   reply: string
   replyLang: 'ro' | 'en' | 'he'
   translation: string | null
@@ -372,13 +397,13 @@ Student's new turn: ${req.audio ? '(attached as audio — listen to it yourself)
 
 How to behave:
 - When she is conversing in Romanian, reply in very simple A1-level Romanian, short (max 15 words), react warmly to what she said, and end with ONE simple question.
-- When she asks a question or asks for help — in any language (e.g. how to pronounce or say something, what a word means, a grammar question) — answer as a helpful tutor in ${tipLang}: give the Romanian word(s), a "sounds like" hint written for ${tipLang} readers, a short example, then invite her back into Romanian.
+- When she asks a question or asks for help (e.g. how to pronounce or say something, what a word means, a grammar question), answer as a helpful tutor in the SAME language she asked in (Hebrew question → Hebrew answer, English → English; if she asked in Romanian, use ${tipLang}): give the Romanian word(s), a "sounds like" hint for readers of that language, a short example, then invite her back into Romanian.
 - Use her personal facts naturally when relevant (her name, pets, family, interests).
 - EVERY TURN with audio, also check her Romanian pronunciation carefully: if any word was clearly mispronounced (wrong sound, wrong stress, missing syllable), name it in "correction" with how to say it right; if her pronunciation was good, "correction" is null — do not invent problems. Also flag grammar or word-choice errors there.
 - "heard" must be written in the language she actually spoke, in its normal spelling (Romanian in Romanian orthography, Hebrew in Hebrew letters, English in English). She only ever speaks Romanian, English, or Hebrew — never another language.
 
 Respond with ONLY this JSON (no markdown):
-{"heard": ${req.audio ? '"<exactly what she said, written in the language she spoke>"' : 'null'}, "reply": "<your reply>", "replyLang": "<ro|en|he — the main language of your reply>", "translation": <if the reply is Romanian, its ${tipLang} translation, else null>, "correction": <short friendly note in ${tipLang}, else null>, "remember": <ONE new lasting personal fact she shared this turn (a name, pet, family member, preference), phrased as a short English sentence, else null>}`
+{"heard": ${req.audio ? '"<exactly what she said, written in the language she spoke>"' : 'null'}, "reply": "<your reply>", "replyLang": "<ro|en|he — the main language of your reply>", "translation": <if your reply is Romanian, its Hebrew translation, else null>, "heardTranslation": <if what she said was Romanian, its Hebrew translation, else null>, "correction": <short friendly note in ${tipLang}, else null>, "remember": <ONE new lasting personal fact she shared this turn (a name, pet, family member, preference), phrased as a short English sentence, else null>}`
 
   const parts: unknown[] = [{ text: prompt }]
   if (req.audio) {
@@ -391,6 +416,7 @@ Respond with ONLY this JSON (no markdown):
   const replyLang = parsed.replyLang === 'en' || parsed.replyLang === 'he' ? parsed.replyLang : 'ro'
   return {
     heard: parsed.heard ? String(parsed.heard) : null,
+    heardTranslation: parsed.heardTranslation ? String(parsed.heardTranslation) : null,
     reply: String(parsed.reply ?? ''),
     replyLang,
     translation: parsed.translation ? String(parsed.translation) : null,
@@ -431,6 +457,18 @@ Deno.serve(async (req) => {
   }
   const feedbackLang = body.feedbackLang === 'he' ? 'he' : 'en'
   const cfg = await loadAppConfig(req)
+
+  // ——— Hebrew translations for live-call captions ———
+  if (body.action === 'translate') {
+    if (!Array.isArray(body.texts) || body.texts.length === 0) {
+      return json({ error: 'bad-request' }, 400)
+    }
+    try {
+      return json({ translations: await translateToHebrew(body.texts, geminiKey) })
+    } catch (e) {
+      return json({ error: 'translate-failed', detail: String((e as Error).message) }, 502)
+    }
+  }
 
   // ——— live voice call: hand the browser a short-lived session key ———
   if (body.action === 'realtime-session') {

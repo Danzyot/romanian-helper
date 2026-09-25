@@ -53,12 +53,13 @@ export default function Talk({ lang, s }: Props) {
         copy[copy.length - 1] = {
           role: 'user',
           text: result.transcript ?? pendingText,
-          note: result.correction ?? undefined,
+          translation: result.heardTranslation ?? undefined,
+          correction: result.correction ?? undefined,
         }
         copy.push({
           role: 'tutor',
           text: result.reply,
-          note: result.translation ?? undefined,
+          translation: result.translation ?? undefined,
           replyLang: result.replyLang,
         })
         return copy
@@ -119,9 +120,14 @@ export default function Talk({ lang, s }: Props) {
           <div key={i} className={`bubble-row ${t.role}`}>
             <div className={`bubble ${t.role}`}>
               <p dir="auto">{t.text}</p>
-              {t.note && (
-                <p className={t.role === 'user' ? 'bubble-correction' : 'bubble-translation'}>
-                  {t.note}
+              {t.translation && (
+                <p className="bubble-translation" dir="rtl" lang="he">
+                  {t.translation}
+                </p>
+              )}
+              {t.correction && (
+                <p className="bubble-correction" dir="auto">
+                  {t.correction}
                 </p>
               )}
               {t.role === 'tutor' && (

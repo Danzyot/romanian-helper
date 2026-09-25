@@ -4,7 +4,7 @@ import { addFact, loadFacts, saveFacts } from '../lib/memory'
 import { effectiveLevel } from '../lib/progress'
 import { startLiveCall, type CallStatus, type LiveCall } from '../lib/realtime'
 import { logEvent } from '../lib/telemetry'
-import { TutorError } from '../lib/tutor'
+import { translateToHebrew, TutorError } from '../lib/tutor'
 import FeedbackPrompt from './FeedbackPrompt'
 
 interface Props {
@@ -17,7 +17,11 @@ interface Caption {
   id: string
   role: 'user' | 'tutor'
   text: string
+  /** Hebrew translation, filled in shortly after the line finishes */
+  he?: string
 }
+
+const HEBREW = /[\u0590-\u05FF]/
 
 /** Calls cost per minute; end them automatically after this long. */
 const MAX_CALL_SECONDS = 15 * 60
@@ -104,6 +108,13 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
             if (st === 'error') setNote(`${s.callFailed}${detail ? ` (${detail})` : ''}`)
           },
           onCaption: upsertCaption,
+          onCaptionDone: (id, _role, text) => {
+            if (HEBREW.test(text)) return // already Hebrew
+            void translateToHebrew([text]).then(([he]) => {
+              if (!he) return
+              setCaptions((caps) => caps.map((c) => (c.id === id ? { ...c, he } : c)))
+            })
+          },
           onSpeaking: setSpeaking,
           onRemember: (fact) => {
             const next = addFact(factsRef.current, fact)
@@ -171,9 +182,14 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
 
       <div className="call-captions">
         {captions.map((c) => (
-          <p key={c.id} className={`cap ${c.role}`} dir="auto">
-            {c.text}
-          </p>
+          <div key={c.id} className={`cap ${c.role}`}>
+            <p dir="auto">{c.text}</p>
+            {c.he && (
+              <p className="cap-he" dir="rtl" lang="he">
+                {c.he}
+              </p>
+            )}
+          </div>
         ))}
         <div ref={capsEndRef} />
       </div>
