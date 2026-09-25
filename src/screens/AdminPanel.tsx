@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { isSignedIn, loadConfig, saveConfig, type ConfigKey } from '../lib/admin'
+import { deployedFunctionVersion, EXPECTED_FUNCTION_VERSION } from '../lib/tutor'
 
 /**
  * Model switcher for any signed-in user. English-only on purpose: it's a
@@ -73,6 +74,7 @@ export default function AdminPanel() {
   const [values, setValues] = useState<Partial<Record<ConfigKey, string>>>({})
   const [custom, setCustom] = useState<Partial<Record<ConfigKey, boolean>>>({})
   const [status, setStatus] = useState<string | null>(null)
+  const [serverVersion, setServerVersion] = useState<string | null | undefined>(undefined)
 
   useEffect(() => {
     void (async () => {
@@ -86,6 +88,7 @@ export default function AdminPanel() {
       }
       setCustom(c)
       setAdmin(true)
+      setServerVersion(await deployedFunctionVersion())
     })()
   }, [])
 
@@ -102,6 +105,13 @@ export default function AdminPanel() {
     <section className="settings-section admin-section">
       <h3>🔧 AI models (advanced)</h3>
       <p className="settings-help">Applies to every account using the app, starting with the next call or turn. No redeploy needed.</p>
+      <p className={serverVersion === EXPECTED_FUNCTION_VERSION ? 'settings-help' : 'error'}>
+        {serverVersion === undefined
+          ? 'Checking the tutor server…'
+          : serverVersion === EXPECTED_FUNCTION_VERSION
+            ? `Tutor server is up to date ✓ (${serverVersion})`
+            : `Tutor server is outdated (${serverVersion ?? 'unknown'}; the app expects ${EXPECTED_FUNCTION_VERSION}). Redeploy the tutor function.`}
+      </p>
       {FIELDS.map((f) => {
         const current = values[f.key] ?? ''
         const isCustom = custom[f.key]

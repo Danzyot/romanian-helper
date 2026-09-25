@@ -10,6 +10,9 @@
 // paste this file, deploy. Then set secrets OPENAI_API_KEY and
 // GEMINI_API_KEY under Edge Functions → Secrets.
 
+/** Bump on every change so the app can tell when this deploy is outdated. */
+const FUNCTION_VERSION = '2026-09-25.1'
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
@@ -42,7 +45,107 @@ interface ConverseRequest {
   feedbackLang: 'en' | 'he'
 }
 
-type TutorRequest = GradeRequest | ConverseRequest | RealtimeRequest | TranslateRequest
+type TutorRequest =
+  | GradeRequest
+  | ConverseRequest
+  | RealtimeRequest
+  | TranslateRequest
+  | ReviewRequest
+  | { action: 'version'; feedbackLang?: 'en' | 'he' }
+
+interface ReviewRequest {
+  action: 'call-review'
+  /** base64 WAV of one utterance */
+  audio: string
+  mimeType?: string
+  /** what Ana said just before, for context */
+  anaSaid?: string
+  feedbackLang: 'en' | 'he'
+}
+
+interface ReviewResult {
+  heard: string | null
+  lang: 'ro' | 'en' | 'he' | null
+  note: { kind: 'pronunciation' | 'grammar'; word: string; tip: string } | null
+}
+
+function reviewPrompt(req: ReviewRequest): string {
+  const tipLang = req.feedbackLang === 'he' ? 'Hebrew' : 'English'
+  return `You check one short utterance from an adult beginner learning Romanian, recorded during a casual conversation practice call. She speaks mostly Romanian, sometimes English or Hebrew, never any other language.
+${req.anaSaid ? `The tutor had just said: "${req.anaSaid}"\n` : ''}
+1. "heard": write exactly what she said, in the language she spoke, in normal spelling (Romanian with ș ț ă â î; Hebrew in Hebrew letters). Use the tutor's line as context to resolve unclear words. If the audio has no speech, use null.
+2. "note": ONLY if she spoke Romanian and CLEARLY got something wrong that a native speaker would notice, describe the single most important error:
+   - pronunciation: a wrong sound (ș said as s, ț as t, ă/â/î wrong, ce/ci vs che/chi, ge/gi vs ghe/ghi), wrong stress, or a missing syllable;
+   - grammar: a clear grammar or word-choice mistake.
+   A foreign accent alone is NOT an error. If unsure, or if she spoke English/Hebrew, use null. Most utterances should get null.
+
+Respond with ONLY this JSON:
+{"heard": <string or null>, "lang": <"ro"|"en"|"he"|null>, "note": null or {"kind": "pronunciation"|"grammar", "word": "<the word or short phrase, written correctly in Romanian>", "tip": "<how to say it right, in ${tipLang}, max 15 words>"}}`
+}
+
+function parseReview(parsed: Record<string, unknown>): ReviewResult {
+  const lang = parsed.lang === 'ro' || parsed.lang === 'en' || parsed.lang === 'he' ? parsed.lang : null
+  const n = parsed.note as Record<string, unknown> | null | undefined
+  const note =
+    n && n.word && n.tip && lang !== 'en' && lang !== 'he'
+      ? {
+          kind: n.kind === 'grammar' ? ('grammar' as const) : ('pronunciation' as const),
+          word: String(n.word),
+          tip: String(n.tip),
+        }
+      : null
+  return { heard: parsed.heard ? String(parsed.heard) : null, lang, note }
+}
+
+/** OpenAI audio chat call returning parsed JSON (tries models in order). */
+async function openaiAudioJson(
+  prompt: string,
+  audio: string | undefined,
+  format: 'wav' | 'mp3' | null,
+  key: string,
+  models: string[],
+): Promise<Record<string, unknown>> {
+  const content: unknown[] = [{ type: 'text', text: prompt }]
+  if (audio && format) content.push({ type: 'input_audio', input_audio: { data: audio, format } })
+  const errors: string[] = []
+  for (const model of models) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 20_000)
+    let res: Response
+    try {
+      res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, modalities: ['text'], messages: [{ role: 'user', content }] }),
+      })
+    } catch (e) {
+      errors.push(`${model}: ${String((e as Error).message).slice(0, 80)}`)
+      continue
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!res.ok) {
+      errors.push(`${model} ${res.status}: ${(await res.text()).slice(0, 160)}`)
+      if (res.status === 401 || res.status === 429) break
+      continue
+    }
+    const data = await res.json()
+    const text: string = data.choices?.[0]?.message?.content ?? ''
+    const s = text.indexOf('{')
+    const e = text.lastIndexOf('}')
+    if (s === -1 || e <= s) {
+      errors.push(`${model}: no JSON in reply`)
+      continue
+    }
+    try {
+      return JSON.parse(text.slice(s, e + 1))
+    } catch {
+      errors.push(`${model}: invalid JSON`)
+    }
+  }
+  throw new Error(`openai failed [${errors.join(' | ')}]`)
+}
 
 interface TranslateRequest {
   action: 'translate'
@@ -107,20 +210,29 @@ function realtimeInstructions(
 ): string {
   const tipLang = feedbackLang === 'he' ? 'Hebrew' : 'English'
   const known = facts.length ? facts.map((f) => `- ${f}`).join('\n') : '- (nothing yet)'
-  return `You are Ana, a warm, patient private Romanian tutor on a live voice call with an adult learner (level ${level}). Her other languages are English and Hebrew; she may speak any of the three.
+  return `# Role
+You are Ana, a warm, patient Romanian conversation partner on a live voice call with an adult beginner (level ${level}). Her other languages are English and Hebrew.
 
-What you know about her:
+# What you know about her
 ${known}
 
-On this call:
+# Your only job: a pleasant, flowing conversation
 - Start by greeting her warmly in simple Romanian${facts.length ? ', using what you know about her' : ''}, and ask one easy question.
-- Mostly speak simple Romanian at her level: short sentences, slowly and clearly, one question at a time. Keep each turn brief (1-3 sentences) so she does most of the talking.
-- The main goal of this call is a natural, flowing conversation. Do NOT correct her pronunciation or grammar out loud, and do not ask her to repeat words. React to what she means and keep the conversation going.
-- Still listen closely. When she CLEARLY mispronounces a Romanian word (a wrong sound such as ș, ț, ă, â/î, ce/ci, ge/gi; wrong stress; a missing syllable) or makes a clear grammar or word-choice mistake, call note_mistake silently, and in the same turn reply naturally as if nothing happened. The note appears on her screen. Flag only clear errors, at most one per turn, and never invent problems.
-- Exception: if she explicitly asks how to pronounce or say something, answer out loud (see below).
-- She may switch language mid-call. If she asks something in Hebrew, answer in Hebrew; if in English, answer in English (how to say or pronounce something, what a word means, a grammar question). Keep it brief, say the Romanian slowly, then invite her back into Romanian.
-- If she seems lost, switch to ${tipLang} for a moment to help, then return to Romanian.
-- Whenever she shares a lasting personal fact (names, pets, family, interests, plans), call remember_fact with a short English sentence, and keep talking naturally. Never mention that you are saving it.`
+- Speak simple Romanian at her level: short sentences, slowly and clearly. Ask ONE question at a time.
+- Keep your turns brief (1-2 sentences) so she does most of the talking.
+- React to what she MEANS, even if her Romanian is imperfect. Beginners pause while thinking; be patient.
+
+# Corrections: NEVER out loud
+- NEVER correct her pronunciation, grammar, or word choice. NEVER repeat her words back "the right way". NEVER ask her to repeat a word.
+- A separate checker shows her corrections on screen. Correcting her yourself interrupts the conversation and discourages her.
+- The only exception: if she explicitly ASKS how to say or pronounce something, answer that question.
+
+# Languages
+- If she speaks Hebrew, reply in Hebrew; if English, reply in English. Keep it brief, then invite her back into Romanian.
+- If she seems lost, help briefly in ${tipLang}, then return to Romanian.
+
+# Memory
+- When she shares a lasting personal fact (names, pets, family, interests, plans), call remember_fact with a short English sentence and keep talking naturally. Never mention that you are saving it.`
 }
 
 /** Mint a short-lived client key for an OpenAI Realtime WebRTC session. */
@@ -128,7 +240,7 @@ async function realtimeSession(
   req: RealtimeRequest,
   key: string,
   cfg: AppConfig,
-): Promise<{ value: string; model: string }> {
+): Promise<{ value: string; model: string; version: string }> {
   const instructions = realtimeInstructions(
     (req.facts ?? []).slice(-40),
     req.feedbackLang === 'he' ? 'he' : 'en',
@@ -151,36 +263,17 @@ async function realtimeSession(
           audio: {
             input: {
               transcription: {
-                model: 'gpt-4o-mini-transcribe',
+                model: 'gpt-4o-transcribe',
                 prompt:
                   'Romanian language practice. A beginner speaking mostly Romanian, sometimes English or Hebrew.',
               },
-              turn_detection: { type: 'semantic_vad' },
+              // low eagerness: wait longer before deciding she has finished,
+              // so Ana does not cut in while a beginner pauses to think
+              turn_detection: { type: 'semantic_vad', eagerness: 'low' },
             },
             output: { voice: cfg.realtime_voice || Deno.env.get('OPENAI_REALTIME_VOICE') || 'marin' },
           },
           tools: [
-            {
-              type: 'function',
-              name: 'note_mistake',
-              description:
-                'Silently show the learner a short on-screen note about one clear mistake she just made, without interrupting the conversation.',
-              parameters: {
-                type: 'object',
-                properties: {
-                  kind: { type: 'string', enum: ['pronunciation', 'grammar'] },
-                  word: {
-                    type: 'string',
-                    description: 'The word or short phrase written correctly in Romanian.',
-                  },
-                  tip: {
-                    type: 'string',
-                    description: `How to say it right, in ${req.feedbackLang === 'he' ? 'Hebrew' : 'English'}, max 15 words.`,
-                  },
-                },
-                required: ['kind', 'word', 'tip'],
-              },
-            },
             {
               type: 'function',
               name: 'remember_fact',
@@ -202,7 +295,7 @@ async function realtimeSession(
     if (res.ok) {
       const data = await res.json()
       const value = data.value ?? data.client_secret?.value
-      if (value) return { value, model }
+      if (value) return { value, model, version: FUNCTION_VERSION }
       errors.push(`${model}: no client secret in reply`)
       continue
     }
@@ -472,55 +565,10 @@ async function converseOpenAI(
   if (req.audio && !format) {
     throw new Error(`openai: unsupported audio ${req.mimeType ?? 'unknown'}`)
   }
-  const content: unknown[] = [{ type: 'text', text: conversePrompt(req) }]
-  if (req.audio && format) {
-    content.push({ type: 'input_audio', input_audio: { data: req.audio, format } })
-  }
   const models = [preferred, 'gpt-audio-mini', 'gpt-audio', 'gpt-4o-audio-preview'].filter(
     (m, i, all): m is string => !!m && all.indexOf(m) === i,
   )
-  const errors: string[] = []
-  for (const model of models) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 20_000)
-    let res: Response
-    try {
-      res = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          modalities: ['text'],
-          messages: [{ role: 'user', content }],
-        }),
-      })
-    } catch (e) {
-      errors.push(`${model}: ${String((e as Error).message).slice(0, 80)}`)
-      continue
-    } finally {
-      clearTimeout(timer)
-    }
-    if (!res.ok) {
-      errors.push(`${model} ${res.status}: ${(await res.text()).slice(0, 160)}`)
-      if (res.status === 401 || res.status === 429) break // key or quota: other models won't help
-      continue
-    }
-    const data = await res.json()
-    const text: string = data.choices?.[0]?.message?.content ?? ''
-    const s = text.indexOf('{')
-    const e = text.lastIndexOf('}')
-    if (s === -1 || e <= s) {
-      errors.push(`${model}: no JSON in reply`)
-      continue
-    }
-    try {
-      return parseConverse(JSON.parse(text.slice(s, e + 1)))
-    } catch {
-      errors.push(`${model}: invalid JSON`)
-    }
-  }
-  throw new Error(`openai failed [${errors.join(' | ')}]`)
+  return parseConverse(await openaiAudioJson(conversePrompt(req), req.audio, format, key, models))
 }
 
 Deno.serve(async (req) => {
@@ -555,6 +603,40 @@ Deno.serve(async (req) => {
   }
   const feedbackLang = body.feedbackLang === 'he' ? 'he' : 'en'
   const cfg = await loadAppConfig(req)
+
+  // ——— which code is deployed (the app warns when it is outdated) ———
+  if (body.action === 'version') {
+    return json({ version: FUNCTION_VERSION })
+  }
+
+  // ——— live call: check one utterance (caption + at most one note) ———
+  if (body.action === 'call-review') {
+    if (!body.audio) return json({ error: 'bad-request' }, 400)
+    const prompt = reviewPrompt(body)
+    const errors: string[] = []
+    try {
+      const parsed = await geminiJson(
+        [{ text: prompt }, { inline_data: { mime_type: body.mimeType || 'audio/wav', data: body.audio } }],
+        0.1,
+        geminiKey,
+        cfg.gemini_model,
+      )
+      return json({ ...parseReview(parsed), checker: 'gemini' })
+    } catch (e) {
+      errors.push(String((e as Error).message))
+    }
+    try {
+      const format = openaiAudioFormat(body.mimeType || 'audio/wav')
+      const parsed = await openaiAudioJson(prompt, body.audio, format, openaiKey, [
+        cfg.chat_openai_model || 'gpt-audio-mini',
+        'gpt-audio',
+      ])
+      return json({ ...parseReview(parsed), checker: 'openai' })
+    } catch (e) {
+      errors.push(String((e as Error).message))
+    }
+    return json({ error: 'review-failed', detail: errors.join(' || ') }, 502)
+  }
 
   // ——— Hebrew translations for live-call captions ———
   if (body.action === 'translate') {

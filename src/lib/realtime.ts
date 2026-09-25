@@ -1,5 +1,6 @@
 import { supabase } from './sync'
 import { TutorError, toTutorError } from './tutor'
+import { UtteranceCapture } from './capture'
 
 /**
  * Live voice call with Ana over OpenAI Realtime (WebRTC). The edge function
@@ -18,8 +19,10 @@ export interface CallHandlers {
   onCaptionDone: (id: string, role: 'user' | 'tutor', text: string) => void
   onSpeaking: (who: 'user' | 'tutor' | null) => void
   onRemember: (fact: string) => void
-  /** Ana flagged a clear mistake without interrupting the conversation */
-  onNote: (note: CallNote) => void
+  /** one finished utterance of hers, as WAV, for the pronunciation checker */
+  onUtterance: (id: string, audio: Blob) => void
+  /** the utterance was too short to check */
+  onUtteranceSkipped: (id: string) => void
 }
 
 export interface CallNote {
@@ -32,6 +35,8 @@ export interface LiveCall {
   hangUp: () => void
   setMuted: (muted: boolean) => void
   model: string
+  /** deployed tutor-function version, to detect a stale deploy */
+  version: string | null
 }
 
 // She speaks only Romanian, English, or Hebrew; captions in other scripts
@@ -65,7 +70,7 @@ async function postSdp(sdp: string, key: string, model: string): Promise<string>
 }
 
 export async function startLiveCall(
-  opts: { facts: string[]; feedbackLang: 'en' | 'he'; level: string },
+  opts: { facts: string[]; feedbackLang: 'en' | 'he'; level: string; captureCtx: AudioContext },
   h: CallHandlers,
 ): Promise<LiveCall> {
   const { data: s } = await supabase.auth.getSession()
@@ -73,16 +78,26 @@ export async function startLiveCall(
   h.onStatus('connecting')
 
   const { data, error } = await supabase.functions.invoke('tutor', {
-    body: { action: 'realtime-session', ...opts },
+    body: {
+      action: 'realtime-session',
+      facts: opts.facts,
+      feedbackLang: opts.feedbackLang,
+      level: opts.level,
+    },
   })
   if (error) throw await toTutorError(error)
   if (data?.error) throw new TutorError('failed', `${data.error}: ${data.detail ?? ''}`)
   const key: string = data.value
   const model: string = data.model
+  const version: string | null = data.version ?? null
 
   const mic = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   })
+  const capture = new UtteranceCapture(opts.captureCtx)
+  capture.attach(mic)
+  let currentUserItem: string | null = null
+
   const pc = new RTCPeerConnection()
   const audioEl = new Audio()
   audioEl.autoplay = true
@@ -102,6 +117,7 @@ export async function startLiveCall(
       /* already closed */
     }
     mic.getTracks().forEach((t) => t.stop())
+    capture.close()
     pc.close()
     audioEl.srcObject = null
     h.onSpeaking(null)
@@ -131,15 +147,25 @@ export async function startLiveCall(
     switch (ev.type) {
       case 'input_audio_buffer.speech_started':
         h.onSpeaking('user')
+        capture.markStart()
+        currentUserItem = ev.item_id ?? null
         if (ev.item_id) h.onCaption(ev.item_id, 'user', '🎤 …', false)
         break
-      case 'input_audio_buffer.speech_stopped':
+      case 'input_audio_buffer.speech_stopped': {
         h.onSpeaking(null)
+        const id = ev.item_id ?? currentUserItem
+        if (id) {
+          void capture.cut().then((wav) => {
+            if (wav) h.onUtterance(id, wav)
+            else h.onUtteranceSkipped(id)
+          })
+        }
         break
+      }
       case 'conversation.item.input_audio_transcription.completed': {
+        // provisional caption; the pronunciation checker replaces it
         const text = cleanUserCaption(ev.transcript ?? '')
         h.onCaption(ev.item_id, 'user', text ?? '🎤', false)
-        if (text) h.onCaptionDone(ev.item_id, 'user', text)
         break
       }
       case 'output_audio_buffer.started':
@@ -161,13 +187,6 @@ export async function startLiveCall(
         try {
           const args = JSON.parse(ev.arguments ?? '{}')
           if (ev.name === 'remember_fact' && args.fact) h.onRemember(String(args.fact))
-          if (ev.name === 'note_mistake' && args.word && args.tip) {
-            h.onNote({
-              kind: args.kind === 'grammar' ? 'grammar' : 'pronunciation',
-              word: String(args.word),
-              tip: String(args.tip),
-            })
-          }
         } catch {
           /* malformed arguments — skip */
         }
@@ -215,5 +234,6 @@ export async function startLiveCall(
     hangUp,
     setMuted: (muted) => mic.getAudioTracks().forEach((t) => (t.enabled = !muted)),
     model,
+    version,
   }
 }

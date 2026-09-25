@@ -216,3 +216,38 @@ export async function translateToHebrew(texts: string[]): Promise<(string | null
   }
   return texts.map((_, i) => (data.translations[i] ? String(data.translations[i]) : null))
 }
+
+/** Must match FUNCTION_VERSION in supabase/functions/tutor/index.ts. */
+export const EXPECTED_FUNCTION_VERSION = '2026-09-25.1'
+
+export async function deployedFunctionVersion(): Promise<string | null> {
+  const { data, error } = await supabase.functions.invoke('tutor', { body: { action: 'version' } })
+  if (error || !data?.version) return null
+  return String(data.version)
+}
+
+export interface UtteranceReview {
+  heard: string | null
+  lang: 'ro' | 'en' | 'he' | null
+  note: { kind: 'pronunciation' | 'grammar'; word: string; tip: string } | null
+}
+
+/** Separate pronunciation check of one live-call utterance. */
+export async function reviewUtterance(
+  audio: Blob,
+  anaSaid: string,
+  feedbackLang: 'en' | 'he',
+): Promise<UtteranceReview> {
+  const { data, error } = await supabase.functions.invoke('tutor', {
+    body: {
+      action: 'call-review',
+      audio: await blobToBase64(audio),
+      mimeType: audio.type || 'audio/wav',
+      anaSaid: anaSaid.slice(-300),
+      feedbackLang,
+    },
+  })
+  if (error) throw await toTutorError(error)
+  if (data?.error) throw new TutorError('failed', `${data.error}: ${data.detail ?? ''}`)
+  return { heard: data.heard ?? null, lang: data.lang ?? null, note: data.note ?? null }
+}

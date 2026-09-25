@@ -2,9 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import type { Lang, Strings } from '../i18n'
 import { addFact, loadFacts, saveFacts } from '../lib/memory'
 import { effectiveLevel } from '../lib/progress'
-import { startLiveCall, type CallNote, type CallStatus, type LiveCall } from '../lib/realtime'
+import {
+  cleanUserCaption,
+  startLiveCall,
+  type CallNote,
+  type CallStatus,
+  type LiveCall,
+} from '../lib/realtime'
 import { logEvent } from '../lib/telemetry'
-import { translateToHebrew, TutorError } from '../lib/tutor'
+import {
+  EXPECTED_FUNCTION_VERSION,
+  reviewUtterance,
+  translateToHebrew,
+  TutorError,
+} from '../lib/tutor'
 import FeedbackPrompt from './FeedbackPrompt'
 
 interface Props {
@@ -88,18 +99,38 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
 
   const notesCountRef = useRef(0)
 
-  /** Show a note right under the learner's most recent line. */
-  const addNote = (n: CallNote) => {
+  const lastAnaLineRef = useRef('')
+  // her lines the checker has already rewritten (the provisional caption must
+  // not overwrite them if it arrives late) and the provisional text per line
+  const reviewedRef = useRef(new Set<string>())
+  const provisionalRef = useRef(new Map<string, string>())
+  // lines the checker gave up on, still waiting for their provisional caption
+  const translateOnArrivalRef = useRef(new Set<string>())
+
+  const translateCaption = (id: string, text: string) => {
+    if (HEBREW.test(text)) return // already Hebrew
+    void translateToHebrew([text]).then(([he]) => {
+      if (!he) return
+      setCaptions((caps) => caps.map((c) => (c.id === id ? { ...c, he } : c)))
+    })
+  }
+
+  /** Translate her line from the provisional caption (now, or when it arrives). */
+  const translateProvisional = (id: string) => {
+    const text = provisionalRef.current.get(id)
+    if (text) translateCaption(id, text)
+    else translateOnArrivalRef.current.add(id)
+  }
+
+  /** Show a note right under the line it belongs to (or her latest line). */
+  const addNote = (n: CallNote, anchorId?: string) => {
     notesCountRef.current += 1
     setCallNotes((all) => [...all, n])
     setCaptions((caps) => {
       const item: Caption = { id: `note-${Date.now()}-${Math.random()}`, role: 'note', text: '', note: n }
-      let at = -1
-      for (let i = caps.length - 1; i >= 0; i--) {
-        if (caps[i].role === 'user') {
-          at = i
-          break
-        }
+      let at = anchorId ? caps.findIndex((c) => c.id === anchorId) : -1
+      for (let i = caps.length - 1; at === -1 && i >= 0; i--) {
+        if (caps[i].role === 'user') at = i
       }
       if (at === -1) return [...caps, item].slice(-30)
       let insert = at + 1
@@ -122,6 +153,12 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     setNote(null)
     setCaptions([])
     setCallNotes([])
+    reviewedRef.current = new Set()
+    provisionalRef.current = new Map()
+    translateOnArrivalRef.current = new Set()
+    lastAnaLineRef.current = ''
+    // created during the tap so the phone lets it run
+    const captureCtx = new AudioContext()
     notesCountRef.current = 0
     setMuted(false)
     setElapsed(0)
@@ -131,22 +168,43 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     try {
       factsRef.current = await loadFacts()
       const call = await startLiveCall(
-        { facts: factsRef.current, feedbackLang: lang, level: effectiveLevel() },
+        { facts: factsRef.current, feedbackLang: lang, level: effectiveLevel(), captureCtx },
         {
           onStatus: (st, detail) => {
             setStatus(st)
             if (st === 'error') setNote(`${s.callFailed}${detail ? ` (${detail})` : ''}`)
           },
-          onCaption: upsertCaption,
-          onCaptionDone: (id, _role, text) => {
-            if (HEBREW.test(text)) return // already Hebrew
-            void translateToHebrew([text]).then(([he]) => {
-              if (!he) return
-              setCaptions((caps) => caps.map((c) => (c.id === id ? { ...c, he } : c)))
-            })
+          onCaption: (id, role, text, append) => {
+            if (role === 'user') {
+              if (reviewedRef.current.has(id)) return
+              if (!text.startsWith('🎤')) {
+                provisionalRef.current.set(id, text)
+                if (translateOnArrivalRef.current.delete(id)) translateCaption(id, text)
+              }
+            }
+            upsertCaption(id, role, text, append)
+          },
+          onCaptionDone: (id, role, text) => {
+            if (role === 'tutor') lastAnaLineRef.current = text
+            translateCaption(id, text)
           },
           onSpeaking: setSpeaking,
-          onNote: addNote,
+          onUtterance: (id, audio) => {
+            void reviewUtterance(audio, lastAnaLineRef.current, lang)
+              .then((r) => {
+                const heard = r.heard ? cleanUserCaption(r.heard) : null
+                if (heard) {
+                  reviewedRef.current.add(id)
+                  upsertCaption(id, 'user', heard, false)
+                }
+                if (heard) translateCaption(id, heard)
+                else translateProvisional(id)
+                if (r.note) addNote(r.note, id)
+              })
+              // checker unavailable: keep the provisional caption
+              .catch(() => translateProvisional(id))
+          },
+          onUtteranceSkipped: translateProvisional,
           onRemember: (fact) => {
             const next = addFact(factsRef.current, fact)
             if (next !== factsRef.current) {
@@ -157,8 +215,10 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
         },
       )
       callRef.current = call
-      logEvent('call_start', { model: call.model })
+      logEvent('call_start', { model: call.model, version: call.version })
+      if (call.version !== EXPECTED_FUNCTION_VERSION) setNote(s.callOutdated)
     } catch (err: unknown) {
+      void captureCtx.close().catch(() => {})
       setStatus('error')
       if (err instanceof TutorError && err.kind === 'auth') setNote(s.tutorSignIn)
       else if (err instanceof DOMException && err.name === 'NotAllowedError') setNote(s.micDenied)

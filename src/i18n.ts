@@ -30,6 +30,8 @@ const strings = {
     callFailed: 'The call could not connect — try again.',
     callMaxReached: 'Calls end automatically after 15 minutes. Call again anytime!',
     callNotesTitle: 'Words to practice from this call:',
+    callOutdated:
+      'The tutor server is out of date, so some features may not work. Redeploy the tutor function in Supabase.',
     // search
     searchPlaceholder: 'Search in română · English · עברית',
     noResults: 'No match in the dictionary.',
@@ -190,6 +192,7 @@ const strings = {
     callFailed: '.לא הצלחנו להתחבר לשיחה — נסי שוב',
     callMaxReached: '!שיחות מסתיימות אוטומטית אחרי 15 דקות. אפשר להתקשר שוב מתי שרוצים',
     callNotesTitle: ':מילים לתרגול מהשיחה הזאת',
+    callOutdated: 'שרת המורה לא מעודכן, ולכן חלק מהתכונות עלולות לא לעבוד. יש לפרוס מחדש את פונקציית tutor ב-Supabase.',
     searchPlaceholder: 'חפשי ברומנית · אנגלית · עברית',
     noResults: 'אין התאמה במילון.',
     practiceAnyway: (w: string) => `לתרגל את “${w}” בכל זאת`,
