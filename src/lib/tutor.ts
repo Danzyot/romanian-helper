@@ -31,7 +31,7 @@ export class TutorError extends Error {
  * response body inside error.context — dig the {error, detail} out of it
  * so failures are diagnosable from the UI.
  */
-async function toTutorError(error: {
+export async function toTutorError(error: {
   name?: string
   message?: string
   context?: unknown

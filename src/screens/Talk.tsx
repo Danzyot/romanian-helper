@@ -5,6 +5,7 @@ import { recordOutcome } from '../lib/progress'
 import { converseTurn, TutorError, type ChatTurn } from '../lib/tutor'
 import { logEvent } from '../lib/telemetry'
 import FeedbackPrompt from './FeedbackPrompt'
+import LiveCallPanel from './LiveCall'
 import { speakFeedback, speakRomanian } from '../speak'
 import { useRecorder } from '../useRecorder'
 
@@ -18,6 +19,7 @@ export default function Talk({ lang, s }: Props) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [typed, setTyped] = useState('')
+  const [inCall, setInCall] = useState(false)
   const factsRef = useRef<string[]>([])
   const recorder = useRecorder()
   const sentBlobRef = useRef<Blob | null>(null)
@@ -104,6 +106,9 @@ export default function Talk({ lang, s }: Props) {
 
   return (
     <div className="talk">
+      <LiveCallPanel lang={lang} s={s} onActiveChange={setInCall} />
+      {!inCall && (
+      <>
       <div className="talk-thread">
         {turns.length === 0 && (
           <div className="card talk-empty">
@@ -169,6 +174,8 @@ export default function Talk({ lang, s }: Props) {
           <p className="error">{recorder.error === 'denied' ? s.micDenied : s.micError}</p>
         )}
       </div>
+      </>
+      )}
     </div>
   )
 }

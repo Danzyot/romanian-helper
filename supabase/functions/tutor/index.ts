@@ -42,7 +42,103 @@ interface ConverseRequest {
   feedbackLang: 'en' | 'he'
 }
 
-type TutorRequest = GradeRequest | ConverseRequest
+type TutorRequest = GradeRequest | ConverseRequest | RealtimeRequest
+
+interface RealtimeRequest {
+  action: 'realtime-session'
+  facts?: string[]
+  feedbackLang: 'en' | 'he'
+  level?: string
+}
+
+function realtimeInstructions(
+  facts: string[],
+  feedbackLang: 'en' | 'he',
+  level: string,
+): string {
+  const tipLang = feedbackLang === 'he' ? 'Hebrew' : 'English'
+  const known = facts.length ? facts.map((f) => `- ${f}`).join('\n') : '- (nothing yet)'
+  return `You are Ana, a warm, patient private Romanian tutor on a live voice call with an adult learner (level ${level}). Her other languages are English and Hebrew; she may speak any of the three.
+
+What you know about her:
+${known}
+
+On this call:
+- Start by greeting her warmly in simple Romanian${facts.length ? ', using what you know about her' : ''}, and ask one easy question.
+- Mostly speak simple Romanian at her level: short sentences, slowly and clearly, one question at a time. Keep each turn brief (1-3 sentences) so she does most of the talking.
+- Listen closely to her pronunciation every time she speaks Romanian. If a word was clearly mispronounced (wrong sound such as ș, ț, ă, â/î, ce/ci, ge/gi; wrong stress; a missing syllable), kindly correct it: say the word correctly and slowly, and ask her to repeat it. If she pronounced it well, do not invent problems; praise her now and then instead.
+- Gently fix grammar or word-choice mistakes by repeating her sentence the correct way.
+- If she asks something in English or Hebrew (how to say or pronounce something, what a word means, a grammar question), answer briefly in ${tipLang}, say the Romanian slowly, then invite her back into Romanian.
+- If she seems lost, switch to ${tipLang} for a moment to help, then return to Romanian.
+- Whenever she shares a lasting personal fact (names, pets, family, interests, plans), call remember_fact with a short English sentence, and keep talking naturally. Never mention that you are saving it.`
+}
+
+/** Mint a short-lived client key for an OpenAI Realtime WebRTC session. */
+async function realtimeSession(
+  req: RealtimeRequest,
+  key: string,
+): Promise<{ value: string; model: string }> {
+  const instructions = realtimeInstructions(
+    (req.facts ?? []).slice(-40),
+    req.feedbackLang === 'he' ? 'he' : 'en',
+    req.level || 'A1',
+  )
+  const configured = Deno.env.get('OPENAI_REALTIME_MODEL')
+  const models = [configured, 'gpt-realtime-mini', 'gpt-realtime'].filter(
+    (m, i, all): m is string => !!m && all.indexOf(m) === i,
+  )
+  const errors: string[] = []
+  for (const model of models) {
+    const res = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: {
+          type: 'realtime',
+          model,
+          instructions,
+          audio: {
+            input: {
+              transcription: {
+                model: 'gpt-4o-mini-transcribe',
+                prompt:
+                  'Romanian language practice. A beginner speaking mostly Romanian, sometimes English or Hebrew.',
+              },
+              turn_detection: { type: 'semantic_vad' },
+            },
+            output: { voice: Deno.env.get('OPENAI_REALTIME_VOICE') || 'marin' },
+          },
+          tools: [
+            {
+              type: 'function',
+              name: 'remember_fact',
+              description:
+                'Save one lasting personal fact the learner shared (a name, pet, family member, interest, or plan) so you remember it in future lessons.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  fact: { type: 'string', description: 'A short English sentence.' },
+                },
+                required: ['fact'],
+              },
+            },
+          ],
+          tool_choice: 'auto',
+        },
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      const value = data.value ?? data.client_secret?.value
+      if (value) return { value, model }
+      errors.push(`${model}: no client secret in reply`)
+      continue
+    }
+    errors.push(`${model} ${res.status}: ${(await res.text()).slice(0, 200)}`)
+    if (res.status === 401 || res.status === 429) break // key or quota: another model won't help
+  }
+  throw new Error(`realtime session failed [${errors.join(' | ')}]`)
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -304,6 +400,18 @@ Deno.serve(async (req) => {
     return json({ error: 'audio-too-long' }, 413)
   }
   const feedbackLang = body.feedbackLang === 'he' ? 'he' : 'en'
+
+  // ——— live voice call: hand the browser a short-lived session key ———
+  if (body.action === 'realtime-session') {
+    try {
+      return json(await realtimeSession(body, openaiKey))
+    } catch (e) {
+      return json(
+        { error: 'realtime-failed', detail: String((e as Error).message) },
+        502,
+      )
+    }
+  }
 
   // ——— conversation turn ———
   if (body.action === 'converse') {
