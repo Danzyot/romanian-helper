@@ -72,7 +72,11 @@ export default function Talk({ lang, s }: Props) {
         }
       }
       recordOutcome(true)
-      logEvent('talk_turn', { voice: 'audio' in input, corrected: !!result.correction })
+      logEvent('talk_turn', {
+        voice: 'audio' in input,
+        corrected: !!result.correction,
+        provider: result.provider,
+      })
       speakReply(result.reply, result.replyLang)
     } catch (err: unknown) {
       setTurns((t) => t.slice(0, -1))

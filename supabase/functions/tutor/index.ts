@@ -69,7 +69,9 @@ Respond with ONLY this JSON: {"translations": [<Hebrew string or null, one per l
 }
 
 /** Admin-set overrides from the app_config table (see supabase/schema.sql). */
-type AppConfig = Partial<Record<'realtime_model' | 'realtime_voice' | 'gemini_model', string>>
+type AppConfig = Partial<
+  Record<'realtime_model' | 'realtime_voice' | 'gemini_model' | 'chat_provider' | 'chat_openai_model', string>
+>
 
 /** Read app_config with the caller's own credentials; any failure → defaults. */
 async function loadAppConfig(req: Request): Promise<AppConfig> {
@@ -373,11 +375,7 @@ interface ConverseReply {
   remember: string | null
 }
 
-async function converse(
-  req: ConverseRequest,
-  key: string,
-  preferred?: string,
-): Promise<ConverseReply> {
+function conversePrompt(req: ConverseRequest): string {
   const tipLang = req.feedbackLang === 'he' ? 'Hebrew' : 'English'
   const historyText = req.history
     .slice(-12)
@@ -405,14 +403,10 @@ How to behave:
 Respond with ONLY this JSON (no markdown):
 {"heard": ${req.audio ? '"<exactly what she said, written in the language she spoke>"' : 'null'}, "reply": "<your reply>", "replyLang": "<ro|en|he — the main language of your reply>", "translation": <if your reply is Romanian, its Hebrew translation, else null>, "heardTranslation": <if what she said was Romanian, its Hebrew translation, else null>, "correction": <short friendly note in ${tipLang}, else null>, "remember": <ONE new lasting personal fact she shared this turn (a name, pet, family member, preference), phrased as a short English sentence, else null>}`
 
-  const parts: unknown[] = [{ text: prompt }]
-  if (req.audio) {
-    parts.push({
-      inline_data: { mime_type: req.mimeType || 'audio/webm', data: req.audio },
-    })
-  }
+  return prompt
+}
 
-  const parsed = await geminiJson(parts, 0.7, key, preferred)
+function parseConverse(parsed: Record<string, unknown>): ConverseReply {
   const replyLang = parsed.replyLang === 'en' || parsed.replyLang === 'he' ? parsed.replyLang : 'ro'
   return {
     heard: parsed.heard ? String(parsed.heard) : null,
@@ -423,6 +417,88 @@ Respond with ONLY this JSON (no markdown):
     correction: parsed.correction ? String(parsed.correction) : null,
     remember: parsed.remember ? String(parsed.remember) : null,
   }
+}
+
+async function converseGemini(
+  req: ConverseRequest,
+  key: string,
+  preferred?: string,
+): Promise<ConverseReply> {
+  const parts: unknown[] = [{ text: conversePrompt(req) }]
+  if (req.audio) {
+    parts.push({
+      inline_data: { mime_type: req.mimeType || 'audio/webm', data: req.audio },
+    })
+  }
+  return parseConverse(await geminiJson(parts, 0.7, key, preferred))
+}
+
+/** OpenAI's audio chat models accept only these recording formats. */
+function openaiAudioFormat(mimeType?: string): 'wav' | 'mp3' | null {
+  const m = (mimeType ?? '').toLowerCase()
+  if (m.includes('wav')) return 'wav'
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3'
+  return null
+}
+
+async function converseOpenAI(
+  req: ConverseRequest,
+  key: string,
+  preferred?: string,
+): Promise<ConverseReply> {
+  const format = req.audio ? openaiAudioFormat(req.mimeType) : null
+  if (req.audio && !format) {
+    throw new Error(`openai: unsupported audio ${req.mimeType ?? 'unknown'}`)
+  }
+  const content: unknown[] = [{ type: 'text', text: conversePrompt(req) }]
+  if (req.audio && format) {
+    content.push({ type: 'input_audio', input_audio: { data: req.audio, format } })
+  }
+  const models = [preferred, 'gpt-audio-mini', 'gpt-audio', 'gpt-4o-audio-preview'].filter(
+    (m, i, all): m is string => !!m && all.indexOf(m) === i,
+  )
+  const errors: string[] = []
+  for (const model of models) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 20_000)
+    let res: Response
+    try {
+      res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          modalities: ['text'],
+          messages: [{ role: 'user', content }],
+        }),
+      })
+    } catch (e) {
+      errors.push(`${model}: ${String((e as Error).message).slice(0, 80)}`)
+      continue
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!res.ok) {
+      errors.push(`${model} ${res.status}: ${(await res.text()).slice(0, 160)}`)
+      if (res.status === 401 || res.status === 429) break // key or quota: other models won't help
+      continue
+    }
+    const data = await res.json()
+    const text: string = data.choices?.[0]?.message?.content ?? ''
+    const s = text.indexOf('{')
+    const e = text.lastIndexOf('}')
+    if (s === -1 || e <= s) {
+      errors.push(`${model}: no JSON in reply`)
+      continue
+    }
+    try {
+      return parseConverse(JSON.parse(text.slice(s, e + 1)))
+    } catch {
+      errors.push(`${model}: invalid JSON`)
+    }
+  }
+  throw new Error(`openai failed [${errors.join(' | ')}]`)
 }
 
 Deno.serve(async (req) => {
@@ -488,15 +564,23 @@ Deno.serve(async (req) => {
     // One call: Ana listens to the audio herself and reports what she heard.
     // (A separate speech-to-text pass added latency and, without a language
     // pin, misread accented Romanian as other languages.)
-    try {
-      const reply = await converse(body, geminiKey, cfg.gemini_model)
-      return json({ transcript: reply.heard, ...reply })
-    } catch (e) {
-      return json(
-        { error: 'converse-failed', detail: String((e as Error).message) },
-        502,
-      )
+    // Default provider is OpenAI (same Ana as the live call); the other one
+    // is the automatic fallback.
+    const primary = cfg.chat_provider === 'gemini' ? 'gemini' : 'openai'
+    const order = primary === 'openai' ? (['openai', 'gemini'] as const) : (['gemini', 'openai'] as const)
+    const errors: string[] = []
+    for (const provider of order) {
+      try {
+        const reply =
+          provider === 'openai'
+            ? await converseOpenAI(body, openaiKey, cfg.chat_openai_model)
+            : await converseGemini(body, geminiKey, cfg.gemini_model)
+        return json({ transcript: reply.heard, provider, ...reply })
+      } catch (e) {
+        errors.push(String((e as Error).message))
+      }
     }
+    return json({ error: 'converse-failed', detail: errors.join(' || ') }, 502)
   }
 
   // ——— pronunciation grading ———

@@ -2,7 +2,12 @@ import { supabase } from './sync'
 
 /** App-wide settings stored in app_config; any signed-in user can change them. */
 
-export type ConfigKey = 'realtime_model' | 'realtime_voice' | 'gemini_model'
+export type ConfigKey =
+  | 'realtime_model'
+  | 'realtime_voice'
+  | 'gemini_model'
+  | 'chat_provider'
+  | 'chat_openai_model'
 
 export async function isSignedIn(): Promise<boolean> {
   const { data: s } = await supabase.auth.getSession()

@@ -1,4 +1,5 @@
 import { supabase } from './sync'
+import { toWav16k } from './wav'
 import { fold } from './search'
 
 export interface GradedWord {
@@ -89,6 +90,8 @@ export interface ChatTurn {
 }
 
 export interface ConverseResult {
+  /** which AI answered: 'openai' normally, 'gemini' when it fell back */
+  provider: string | null
   transcript: string | null
   heardTranslation: string | null
   reply: string
@@ -114,8 +117,16 @@ export async function converseTurn(
     feedbackLang,
   }
   if ('audio' in input) {
-    body.audio = await blobToBase64(input.audio)
-    body.mimeType = input.audio.type || 'audio/webm'
+    // WAV works with both providers; fall back to the raw recording (which
+    // only Gemini accepts) if the phone can't decode it
+    let audio: Blob = input.audio
+    try {
+      audio = await toWav16k(input.audio)
+    } catch {
+      /* keep the original recording */
+    }
+    body.audio = await blobToBase64(audio)
+    body.mimeType = audio.type || 'audio/webm'
   } else {
     body.text = input.text
   }
@@ -131,6 +142,7 @@ export async function converseTurn(
     data.replyLang === 'en' || data.replyLang === 'he' ? data.replyLang : 'ro'
   return {
     // Whisper transcript when it worked; otherwise what Ana herself heard
+    provider: data.provider ? String(data.provider) : null,
     transcript: data.transcript ?? data.heard ?? null,
     heardTranslation: data.heardTranslation ? String(data.heardTranslation) : null,
     reply: String(data.reply ?? ''),

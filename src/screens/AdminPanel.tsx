@@ -36,9 +36,29 @@ const FIELDS: {
     ],
   },
   {
+    key: 'chat_provider',
+    label: 'Typed/recorded chat: which AI',
+    help: 'The Talk chat (not the live call). The other AI takes over automatically if this one fails.',
+    options: [
+      { value: '', label: 'Default (OpenAI, same Ana as the live call)' },
+      { value: 'openai', label: 'OpenAI' },
+      { value: 'gemini', label: 'Gemini (cheapest)' },
+    ],
+  },
+  {
+    key: 'chat_openai_model',
+    label: 'Chat model (OpenAI)',
+    help: 'Used when the chat runs on OpenAI. Must be an audio-capable model to hear recordings.',
+    options: [
+      { value: '', label: 'Default (gpt-audio-mini)' },
+      { value: 'gpt-audio-mini', label: 'gpt-audio-mini: cheaper' },
+      { value: 'gpt-audio', label: 'gpt-audio: best quality' },
+    ],
+  },
+  {
     key: 'gemini_model',
-    label: 'Chat & grading model (Gemini)',
-    help: 'Used by pronunciation grading and the typed/recorded chat. Falls back automatically if the chosen model fails.',
+    label: 'Grading & fallback model (Gemini)',
+    help: 'Used for pronunciation grading, caption translations, and the chat when Gemini is chosen or OpenAI fails.',
     options: [
       { value: '', label: 'Default (gemini-flash-latest)' },
       { value: 'gemini-flash-latest', label: 'gemini-flash-latest: fast, cheap' },
