@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Strings } from '../i18n'
+import AdminPanel from './AdminPanel'
 import { LEVELS, resetProgress, type Level } from '../lib/progress'
 import { getSettings, updateSettings, type Settings as S } from '../lib/settings'
 import {
@@ -183,6 +184,8 @@ export default function Settings({ s, onClose, onChanged }: Props) {
             </>
           )}
         </section>
+
+        <AdminPanel key={signedInAs ?? 'signed-out'} />
 
         {/* reset */}
         <section className="settings-section">

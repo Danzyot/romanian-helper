@@ -63,3 +63,38 @@ alter table public.usage_events enable row level security;
 drop policy if exists "own usage_events" on public.usage_events;
 create policy "own usage_events" on public.usage_events
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Admin-controlled app settings (e.g. which AI models to use).
+-- Everyone signed in can read them (the tutor function needs them on every
+-- call); only accounts listed in app_admins can change them.
+create table if not exists public.app_admins (
+  user_id uuid primary key references auth.users (id) on delete cascade
+);
+
+create table if not exists public.app_config (
+  key        text primary key,
+  value      text not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.app_admins enable row level security;
+alter table public.app_config enable row level security;
+
+drop policy if exists "see own admin row" on public.app_admins;
+create policy "see own admin row" on public.app_admins
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "signed-in read config" on public.app_config;
+create policy "signed-in read config" on public.app_config
+  for select to authenticated using (true);
+
+drop policy if exists "admins write config" on public.app_config;
+create policy "admins write config" on public.app_config
+  for all to authenticated
+  using (exists (select 1 from public.app_admins a where a.user_id = auth.uid()))
+  with check (exists (select 1 from public.app_admins a where a.user_id = auth.uid()));
+
+-- Make yourself admin (run once, with the email you sign in to the app with):
+-- insert into public.app_admins (user_id)
+--   select id from auth.users where email = 'you@example.com'
+--   on conflict do nothing;

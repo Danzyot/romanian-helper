@@ -44,6 +44,29 @@ interface ConverseRequest {
 
 type TutorRequest = GradeRequest | ConverseRequest | RealtimeRequest
 
+/** Admin-set overrides from the app_config table (see supabase/schema.sql). */
+type AppConfig = Partial<Record<'realtime_model' | 'realtime_voice' | 'gemini_model', string>>
+
+/** Read app_config with the caller's own credentials; any failure → defaults. */
+async function loadAppConfig(req: Request): Promise<AppConfig> {
+  const base = Deno.env.get('SUPABASE_URL')
+  const apikey = req.headers.get('apikey')
+  const auth = req.headers.get('Authorization')
+  if (!base || !apikey || !auth) return {}
+  try {
+    const res = await fetch(`${base}/rest/v1/app_config?select=key,value`, {
+      headers: { apikey, Authorization: auth },
+    })
+    if (!res.ok) return {}
+    const rows: { key: string; value: string }[] = await res.json()
+    const cfg: Record<string, string> = {}
+    for (const r of rows) if (r.value?.trim()) cfg[r.key] = r.value.trim()
+    return cfg as AppConfig
+  } catch {
+    return {}
+  }
+}
+
 interface RealtimeRequest {
   action: 'realtime-session'
   facts?: string[]
@@ -77,13 +100,14 @@ On this call:
 async function realtimeSession(
   req: RealtimeRequest,
   key: string,
+  cfg: AppConfig,
 ): Promise<{ value: string; model: string }> {
   const instructions = realtimeInstructions(
     (req.facts ?? []).slice(-40),
     req.feedbackLang === 'he' ? 'he' : 'en',
     req.level || 'A1',
   )
-  const configured = Deno.env.get('OPENAI_REALTIME_MODEL')
+  const configured = cfg.realtime_model || Deno.env.get('OPENAI_REALTIME_MODEL')
   const models = [configured, 'gpt-realtime-mini', 'gpt-realtime'].filter(
     (m, i, all): m is string => !!m && all.indexOf(m) === i,
   )
@@ -106,7 +130,7 @@ async function realtimeSession(
               },
               turn_detection: { type: 'semantic_vad' },
             },
-            output: { voice: Deno.env.get('OPENAI_REALTIME_VOICE') || 'marin' },
+            output: { voice: cfg.realtime_voice || Deno.env.get('OPENAI_REALTIME_VOICE') || 'marin' },
           },
           tools: [
             {
@@ -194,10 +218,13 @@ async function geminiJson(
   parts: unknown[],
   temperature: number,
   key: string,
+  preferred?: string,
 ): Promise<Record<string, unknown>> {
   // "-latest" aliases always point at a live model; dated names get retired.
   // flash-lite has a separate quota pool — a real fallback when 429s hit.
-  const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest']
+  const models = [preferred, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest'].filter(
+    (m, i, all): m is string => !!m && all.indexOf(m) === i,
+  )
   const errors: string[] = []
 
   const attempt = async (model: string, withThinkingOff: boolean): Promise<Record<string, unknown> | { retryable: boolean; thinkingRejected?: boolean }> => {
@@ -279,6 +306,7 @@ async function coach(
   target: string,
   feedbackLang: 'en' | 'he',
   key: string,
+  preferred?: string,
 ): Promise<CoachVerdict> {
   const tipLang = feedbackLang === 'he' ? 'Hebrew' : 'English'
   const prompt = `You are a warm, encouraging Romanian pronunciation tutor. Your student is a beginner adult learner.
@@ -295,6 +323,7 @@ Respond with ONLY this JSON (no markdown, no extra text):
     [{ text: prompt }, { inline_data: { mime_type: mimeType, data: b64Audio } }],
     0.3,
     key,
+    preferred,
   )
   return {
     score: Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0))),
@@ -322,6 +351,7 @@ interface ConverseReply {
 async function converse(
   req: ConverseRequest,
   key: string,
+  preferred?: string,
 ): Promise<ConverseReply> {
   const tipLang = req.feedbackLang === 'he' ? 'Hebrew' : 'English'
   const historyText = req.history
@@ -357,7 +387,7 @@ Respond with ONLY this JSON (no markdown):
     })
   }
 
-  const parsed = await geminiJson(parts, 0.7, key)
+  const parsed = await geminiJson(parts, 0.7, key, preferred)
   const replyLang = parsed.replyLang === 'en' || parsed.replyLang === 'he' ? parsed.replyLang : 'ro'
   return {
     heard: parsed.heard ? String(parsed.heard) : null,
@@ -400,11 +430,12 @@ Deno.serve(async (req) => {
     return json({ error: 'audio-too-long' }, 413)
   }
   const feedbackLang = body.feedbackLang === 'he' ? 'he' : 'en'
+  const cfg = await loadAppConfig(req)
 
   // ——— live voice call: hand the browser a short-lived session key ———
   if (body.action === 'realtime-session') {
     try {
-      return json(await realtimeSession(body, openaiKey))
+      return json(await realtimeSession(body, openaiKey, cfg))
     } catch (e) {
       return json(
         { error: 'realtime-failed', detail: String((e as Error).message) },
@@ -420,7 +451,7 @@ Deno.serve(async (req) => {
     // (A separate speech-to-text pass added latency and, without a language
     // pin, misread accented Romanian as other languages.)
     try {
-      const reply = await converse(body, geminiKey)
+      const reply = await converse(body, geminiKey, cfg.gemini_model)
       return json({ transcript: reply.heard, ...reply })
     } catch (e) {
       return json(
@@ -441,7 +472,7 @@ Deno.serve(async (req) => {
   const bytes = base64ToBytes(body.audio)
   const [tr, co] = await Promise.allSettled([
     transcribe(bytes, mimeType, openaiKey, 'ro'),
-    coach(body.audio, mimeType, body.target, feedbackLang, geminiKey),
+    coach(body.audio, mimeType, body.target, feedbackLang, geminiKey, cfg.gemini_model),
   ])
 
   if (tr.status === 'rejected' && co.status === 'rejected') {

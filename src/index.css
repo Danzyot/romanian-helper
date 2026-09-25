@@ -1145,3 +1145,32 @@ input:focus-visible {
 .call-buttons .btn {
   flex: 1;
 }
+
+/* ——— admin panel ——— */
+.admin-section {
+  border-style: dashed;
+}
+
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.admin-field select {
+  border: 1.5px solid var(--card-line);
+  border-radius: 6px;
+  background: var(--paper);
+  padding: 0.6rem 0.7rem;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.admin-field small {
+  font-weight: 400;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
