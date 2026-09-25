@@ -18,6 +18,14 @@ export interface CallHandlers {
   onCaptionDone: (id: string, role: 'user' | 'tutor', text: string) => void
   onSpeaking: (who: 'user' | 'tutor' | null) => void
   onRemember: (fact: string) => void
+  /** Ana flagged a clear mistake without interrupting the conversation */
+  onNote: (note: CallNote) => void
+}
+
+export interface CallNote {
+  kind: 'pronunciation' | 'grammar'
+  word: string
+  tip: string
 }
 
 export interface LiveCall {
@@ -150,13 +158,18 @@ export async function startLiveCall(
         if (ev.item_id && ev.transcript) h.onCaptionDone(ev.item_id, 'tutor', ev.transcript)
         break
       case 'response.function_call_arguments.done':
-        if (ev.name === 'remember_fact') {
-          try {
-            const fact = JSON.parse(ev.arguments ?? '{}').fact
-            if (fact) h.onRemember(String(fact))
-          } catch {
-            /* malformed arguments — skip */
+        try {
+          const args = JSON.parse(ev.arguments ?? '{}')
+          if (ev.name === 'remember_fact' && args.fact) h.onRemember(String(args.fact))
+          if (ev.name === 'note_mistake' && args.word && args.tip) {
+            h.onNote({
+              kind: args.kind === 'grammar' ? 'grammar' : 'pronunciation',
+              word: String(args.word),
+              tip: String(args.tip),
+            })
           }
+        } catch {
+          /* malformed arguments — skip */
         }
         send({
           type: 'conversation.item.create',

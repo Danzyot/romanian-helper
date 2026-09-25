@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Lang, Strings } from '../i18n'
 import { addFact, loadFacts, saveFacts } from '../lib/memory'
 import { effectiveLevel } from '../lib/progress'
-import { startLiveCall, type CallStatus, type LiveCall } from '../lib/realtime'
+import { startLiveCall, type CallNote, type CallStatus, type LiveCall } from '../lib/realtime'
 import { logEvent } from '../lib/telemetry'
 import { translateToHebrew, TutorError } from '../lib/tutor'
 import FeedbackPrompt from './FeedbackPrompt'
@@ -15,10 +15,11 @@ interface Props {
 
 interface Caption {
   id: string
-  role: 'user' | 'tutor'
+  role: 'user' | 'tutor' | 'note'
   text: string
   /** Hebrew translation, filled in shortly after the line finishes */
   he?: string
+  note?: CallNote
 }
 
 const HEBREW = /[\u0590-\u05FF]/
@@ -39,6 +40,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   const [muted, setMuted] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [note, setNote] = useState<string | null>(null)
+  const [callNotes, setCallNotes] = useState<CallNote[]>([])
   const callRef = useRef<LiveCall | null>(null)
   const factsRef = useRef<string[]>([])
   const capsEndRef = useRef<HTMLDivElement>(null)
@@ -76,9 +78,35 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   useEffect(() => {
     if ((status === 'ended' || status === 'error') && !loggedEndRef.current && elapsedRef.current > 0) {
       loggedEndRef.current = true
-      logEvent('call_end', { seconds: elapsedRef.current, model: callRef.current?.model })
+      logEvent('call_end', {
+        seconds: elapsedRef.current,
+        model: callRef.current?.model,
+        notes: notesCountRef.current,
+      })
     }
   }, [status])
+
+  const notesCountRef = useRef(0)
+
+  /** Show a note right under the learner's most recent line. */
+  const addNote = (n: CallNote) => {
+    notesCountRef.current += 1
+    setCallNotes((all) => [...all, n])
+    setCaptions((caps) => {
+      const item: Caption = { id: `note-${Date.now()}-${Math.random()}`, role: 'note', text: '', note: n }
+      let at = -1
+      for (let i = caps.length - 1; i >= 0; i--) {
+        if (caps[i].role === 'user') {
+          at = i
+          break
+        }
+      }
+      if (at === -1) return [...caps, item].slice(-30)
+      let insert = at + 1
+      while (insert < caps.length && caps[insert].role === 'note') insert++
+      return [...caps.slice(0, insert), item, ...caps.slice(insert)].slice(-30)
+    })
+  }
 
   const upsertCaption = (id: string, role: 'user' | 'tutor', text: string, append: boolean) => {
     setCaptions((caps) => {
@@ -93,6 +121,8 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   const start = async () => {
     setNote(null)
     setCaptions([])
+    setCallNotes([])
+    notesCountRef.current = 0
     setMuted(false)
     setElapsed(0)
     elapsedRef.current = 0
@@ -116,6 +146,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
             })
           },
           onSpeaking: setSpeaking,
+          onNote: addNote,
           onRemember: (fact) => {
             const next = addFact(factsRef.current, fact)
             if (next !== factsRef.current) {
@@ -154,6 +185,19 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
             {s.callEnded} · {mmss(elapsed)}
           </p>
         )}
+        {status === 'ended' && callNotes.length > 0 && (
+          <div className="call-summary">
+            <p className="call-summary-title">{s.callNotesTitle}</p>
+            {callNotes.map((n, i) => (
+              <p key={i} className="call-summary-row">
+                <b lang="ro" dir="ltr">
+                  {n.word}
+                </b>{' '}
+                <span dir="auto">{n.tip}</span>
+              </p>
+            ))}
+          </div>
+        )}
         {status === 'ended' && elapsed > 0 && <FeedbackPrompt context="call" s={s} />}
         <button className="btn call-start" onClick={() => void start()}>
           📞 {status === 'ended' ? s.callAgain : s.callAna}
@@ -181,7 +225,18 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
       {status === 'live' && <p className="call-timer">{mmss(elapsed)}</p>}
 
       <div className="call-captions">
-        {captions.map((c) => (
+        {captions.map((c) =>
+          c.role === 'note' && c.note ? (
+            <div key={c.id} className="cap note">
+              <span aria-hidden>{c.note.kind === 'grammar' ? '✏️' : '🗣️'}</span>
+              <p>
+                <b lang="ro" dir="ltr">
+                  {c.note.word}
+                </b>{' '}
+                <span dir="auto">{c.note.tip}</span>
+              </p>
+            </div>
+          ) : (
           <div key={c.id} className={`cap ${c.role}`}>
             <p dir="auto">{c.text}</p>
             {c.he && (
@@ -190,7 +245,8 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
               </p>
             )}
           </div>
-        ))}
+          ),
+        )}
         <div ref={capsEndRef} />
       </div>
 

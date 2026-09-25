@@ -115,8 +115,9 @@ ${known}
 On this call:
 - Start by greeting her warmly in simple Romanian${facts.length ? ', using what you know about her' : ''}, and ask one easy question.
 - Mostly speak simple Romanian at her level: short sentences, slowly and clearly, one question at a time. Keep each turn brief (1-3 sentences) so she does most of the talking.
-- Listen closely to her pronunciation every time she speaks Romanian. If a word was clearly mispronounced (wrong sound such as ș, ț, ă, â/î, ce/ci, ge/gi; wrong stress; a missing syllable), kindly correct it: say the word correctly and slowly, and ask her to repeat it. If she pronounced it well, do not invent problems; praise her now and then instead.
-- Gently fix grammar or word-choice mistakes by repeating her sentence the correct way.
+- The main goal of this call is a natural, flowing conversation. Do NOT correct her pronunciation or grammar out loud, and do not ask her to repeat words. React to what she means and keep the conversation going.
+- Still listen closely. When she CLEARLY mispronounces a Romanian word (a wrong sound such as ș, ț, ă, â/î, ce/ci, ge/gi; wrong stress; a missing syllable) or makes a clear grammar or word-choice mistake, call note_mistake silently, and in the same turn reply naturally as if nothing happened. The note appears on her screen. Flag only clear errors, at most one per turn, and never invent problems.
+- Exception: if she explicitly asks how to pronounce or say something, answer out loud (see below).
 - She may switch language mid-call. If she asks something in Hebrew, answer in Hebrew; if in English, answer in English (how to say or pronounce something, what a word means, a grammar question). Keep it brief, say the Romanian slowly, then invite her back into Romanian.
 - If she seems lost, switch to ${tipLang} for a moment to help, then return to Romanian.
 - Whenever she shares a lasting personal fact (names, pets, family, interests, plans), call remember_fact with a short English sentence, and keep talking naturally. Never mention that you are saving it.`
@@ -159,6 +160,27 @@ async function realtimeSession(
             output: { voice: cfg.realtime_voice || Deno.env.get('OPENAI_REALTIME_VOICE') || 'marin' },
           },
           tools: [
+            {
+              type: 'function',
+              name: 'note_mistake',
+              description:
+                'Silently show the learner a short on-screen note about one clear mistake she just made, without interrupting the conversation.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['pronunciation', 'grammar'] },
+                  word: {
+                    type: 'string',
+                    description: 'The word or short phrase written correctly in Romanian.',
+                  },
+                  tip: {
+                    type: 'string',
+                    description: `How to say it right, in ${req.feedbackLang === 'he' ? 'Hebrew' : 'English'}, max 15 words.`,
+                  },
+                },
+                required: ['kind', 'word', 'tip'],
+              },
+            },
             {
               type: 'function',
               name: 'remember_fact',

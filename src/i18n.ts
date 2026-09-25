@@ -29,6 +29,7 @@ const strings = {
     callEnded: 'Call ended',
     callFailed: 'The call could not connect — try again.',
     callMaxReached: 'Calls end automatically after 15 minutes. Call again anytime!',
+    callNotesTitle: 'Words to practice from this call:',
     // search
     searchPlaceholder: 'Search in română · English · עברית',
     noResults: 'No match in the dictionary.',
@@ -188,6 +189,7 @@ const strings = {
     callEnded: 'השיחה הסתיימה',
     callFailed: '.לא הצלחנו להתחבר לשיחה — נסי שוב',
     callMaxReached: '!שיחות מסתיימות אוטומטית אחרי 15 דקות. אפשר להתקשר שוב מתי שרוצים',
+    callNotesTitle: ':מילים לתרגול מהשיחה הזאת',
     searchPlaceholder: 'חפשי ברומנית · אנגלית · עברית',
     noResults: 'אין התאמה במילון.',
     practiceAnyway: (w: string) => `לתרגל את “${w}” בכל זאת`,
