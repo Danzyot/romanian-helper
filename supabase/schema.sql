@@ -40,6 +40,10 @@ create table if not exists public.tutor_memory (
   updated_at timestamptz not null default now()
 );
 
+-- her name (kept apart from the facts) and what Ana asked lately
+alter table public.tutor_memory add column if not exists name text not null default '';
+alter table public.tutor_memory add column if not exists recent jsonb not null default '{}';
+
 alter table public.tutor_memory enable row level security;
 
 drop policy if exists "own tutor_memory" on public.tutor_memory;

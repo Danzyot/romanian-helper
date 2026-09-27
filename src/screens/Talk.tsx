@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Lang, Strings } from '../i18n'
-import { addFact, loadFacts, saveFacts } from '../lib/memory'
+import { applyLearned, loadMemory, pickTopic, tutorContext, updateMemory, withQuestions, withTopic } from '../lib/memory'
 import { recordOutcome } from '../lib/progress'
 import { converseTurn, TutorError, type ChatTurn } from '../lib/tutor'
 import { logEvent } from '../lib/telemetry'
@@ -20,15 +20,15 @@ export default function Talk({ lang, s }: Props) {
   const [note, setNote] = useState<string | null>(null)
   const [typed, setTyped] = useState('')
   const [inCall, setInCall] = useState(false)
-  const factsRef = useRef<string[]>([])
+  // this chat's suggested subject, picked on the first turn
+  const topicRef = useRef<string | null>(null)
   const recorder = useRecorder()
   const sentBlobRef = useRef<Blob | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
+  // warm the memory cache so the first turn doesn't wait
   useEffect(() => {
-    void loadFacts().then((facts) => {
-      factsRef.current = facts
-    })
+    void loadMemory()
   }, [])
 
   useEffect(() => {
@@ -47,7 +47,14 @@ export default function Talk({ lang, s }: Props) {
     // optimistic user bubble; replaced with the transcript once known
     setTurns((t) => [...t, { role: 'user', text: pendingText }])
     try {
-      const result = await converseTurn(input, turns, factsRef.current, lang)
+      // wait for her memory, so Ana never answers without knowing her name
+      const memory = await loadMemory()
+      if (!topicRef.current) {
+        const topic = pickTopic(memory)
+        topicRef.current = topic
+        void updateMemory((m) => withTopic(m, topic))
+      }
+      const result = await converseTurn(input, turns, tutorContext(memory, topicRef.current), lang)
       setTurns((t) => {
         const copy = [...t]
         copy[copy.length - 1] = {
@@ -64,13 +71,12 @@ export default function Talk({ lang, s }: Props) {
         })
         return copy
       })
-      if (result.remember) {
-        const next = addFact(factsRef.current, result.remember)
-        if (next !== factsRef.current) {
-          factsRef.current = next
-          void saveFacts(next)
-        }
-      }
+      void updateMemory((m) =>
+        withQuestions(
+          applyLearned(m, { fact: result.remember, replaces: result.replaces, herName: result.herName }),
+          result.replyLang === 'ro' ? [result.reply] : [],
+        ),
+      )
       recordOutcome(true)
       logEvent('talk_turn', {
         voice: 'audio' in input,

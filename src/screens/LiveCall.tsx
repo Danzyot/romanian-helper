@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Lang, Strings } from '../i18n'
-import { addFact, loadFacts, saveFacts } from '../lib/memory'
+import { applyLearned, loadMemory, pickTopic, tutorContext, updateMemory, withQuestions, withTopic } from '../lib/memory'
 import { effectiveLevel } from '../lib/progress'
 import {
   cleanUserCaption,
@@ -55,7 +55,8 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   const [note, setNote] = useState<string | null>(null)
   const [callNotes, setCallNotes] = useState<CallNote[]>([])
   const callRef = useRef<LiveCall | null>(null)
-  const factsRef = useRef<string[]>([])
+  // Ana's lines this call; their questions are remembered when it ends
+  const anaLinesRef = useRef<string[]>([])
   const capsEndRef = useRef<HTMLDivElement>(null)
   const elapsedRef = useRef(0)
 
@@ -91,6 +92,9 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   useEffect(() => {
     if ((status === 'ended' || status === 'error') && !loggedEndRef.current && elapsedRef.current > 0) {
       loggedEndRef.current = true
+      const lines = anaLinesRef.current
+      anaLinesRef.current = []
+      if (lines.length) void updateMemory((m) => withQuestions(m, lines))
       logEvent('call_end', {
         seconds: elapsedRef.current,
         model: callRef.current?.model,
@@ -175,9 +179,12 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     loggedEndRef.current = false
     setStatus('connecting')
     try {
-      factsRef.current = await loadFacts()
+      anaLinesRef.current = []
+      const memory = await loadMemory()
+      const topic = pickTopic(memory)
+      void updateMemory((m) => withTopic(m, topic))
       const call = await startLiveCall(
-        { facts: factsRef.current, feedbackLang: lang, level: effectiveLevel(), captureCtx, audioEl },
+        { about: tutorContext(memory, topic), feedbackLang: lang, level: effectiveLevel(), captureCtx, audioEl },
         {
           onStatus: (st, detail) => {
             setStatus(st)
@@ -194,7 +201,10 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
             upsertCaption(id, role, text, append)
           },
           onCaptionDone: (id, role, text) => {
-            if (role === 'tutor') lastAnaLineRef.current = text
+            if (role === 'tutor') {
+              lastAnaLineRef.current = text
+              anaLinesRef.current.push(text)
+            }
             translateCaption(id, text)
           },
           onSpeaking: setSpeaking,
@@ -222,13 +232,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
             )
           },
           onError: (code, message) => logEvent('call_error', { code, message: message.slice(0, 300) }),
-          onRemember: (fact) => {
-            const next = addFact(factsRef.current, fact)
-            if (next !== factsRef.current) {
-              factsRef.current = next
-              void saveFacts(next)
-            }
-          },
+          onRemember: (learned) => void updateMemory((m) => applyLearned(m, learned)),
         },
       )
       callRef.current = call

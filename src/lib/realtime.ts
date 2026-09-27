@@ -1,5 +1,6 @@
 import { supabase } from './sync'
-import { TutorError, toTutorError } from './tutor'
+import { TutorError, toTutorError, type LearnerContext } from './tutor'
+import type { Learned } from './memory'
 import { UtteranceCapture } from './capture'
 
 /**
@@ -18,7 +19,7 @@ export interface CallHandlers {
   /** a caption is final; good moment to translate it */
   onCaptionDone: (id: string, role: 'user' | 'tutor', text: string) => void
   onSpeaking: (who: 'user' | 'tutor' | null) => void
-  onRemember: (fact: string) => void
+  onRemember: (learned: Learned) => void
   /** one finished utterance of hers, as WAV, for the pronunciation checker */
   onUtterance: (id: string, audio: Blob) => void
   /** the utterance was too short to check */
@@ -85,7 +86,7 @@ async function postSdp(sdp: string, key: string, model: string): Promise<string>
 
 export async function startLiveCall(
   opts: {
-    facts: string[]
+    about: LearnerContext
     feedbackLang: 'en' | 'he'
     level: string
     captureCtx: AudioContext
@@ -101,7 +102,7 @@ export async function startLiveCall(
   const { data, error } = await supabase.functions.invoke('tutor', {
     body: {
       action: 'realtime-session',
-      facts: opts.facts,
+      ...opts.about,
       feedbackLang: opts.feedbackLang,
       level: opts.level,
     },
@@ -266,7 +267,13 @@ export async function startLiveCall(
       case 'response.function_call_arguments.done':
         try {
           const args = JSON.parse(ev.arguments ?? '{}')
-          if (ev.name === 'remember_fact' && args.fact) h.onRemember(String(args.fact))
+          if (ev.name === 'remember_fact' && (args.fact || args.her_name)) {
+            h.onRemember({
+              fact: args.fact ? String(args.fact) : null,
+              replaces: args.replaces ? String(args.replaces) : null,
+              herName: args.her_name ? String(args.her_name) : null,
+            })
+          }
         } catch {
           /* malformed arguments — skip */
         }

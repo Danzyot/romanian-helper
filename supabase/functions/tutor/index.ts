@@ -11,7 +11,7 @@
 // GEMINI_API_KEY under Edge Functions → Secrets.
 
 /** Bump on every change so the app can tell when this deploy is outdated. */
-const FUNCTION_VERSION = '2026-09-27.2'
+const FUNCTION_VERSION = '2026-09-28.1'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -31,7 +31,7 @@ interface GradeRequest {
   feedbackLang: 'en' | 'he'
 }
 
-interface ConverseRequest {
+interface ConverseRequest extends LearnerContext {
   action: 'converse'
   /** base64 audio of the learner's turn (or use text instead) */
   audio?: string
@@ -40,9 +40,19 @@ interface ConverseRequest {
   text?: string
   /** prior turns, oldest first, capped by the client */
   history: { role: 'user' | 'tutor'; text: string }[]
-  /** long-term facts about the learner, managed by the client */
-  facts?: string[]
   feedbackLang: 'en' | 'he'
+}
+
+/** What the app remembers about the learner (sent with every conversation). */
+interface LearnerContext {
+  /** what to call her; empty when unknown */
+  name?: string
+  /** long-term facts about her life */
+  facts?: string[]
+  /** questions Ana asked in recent lessons */
+  recentQuestions?: string[]
+  /** suggested subject for this lesson */
+  topic?: string
 }
 
 type TutorRequest =
@@ -205,30 +215,60 @@ async function loadAppConfig(req: Request): Promise<AppConfig> {
   }
 }
 
-interface RealtimeRequest {
+interface RealtimeRequest extends LearnerContext {
   action: 'realtime-session'
-  facts?: string[]
   feedbackLang: 'en' | 'he'
   level?: string
 }
 
+const clean = (v: unknown, max: number) =>
+  typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : ''
+const cleanList = (v: unknown, n: number, max: number) =>
+  (Array.isArray(v) ? v : []).map((x) => clean(x, max)).filter(Boolean).slice(-n)
+
+/**
+ * The memory block shared by the chat and the live call: her name (kept
+ * apart from the facts so other people's names are never mistaken for hers),
+ * what she has told Ana, what Ana asked lately, and today's topic.
+ */
+function aboutHer(ctx: LearnerContext): string {
+  const name = clean(ctx.name, 40)
+  const facts = cleanList(ctx.facts, 40, 200)
+  const asked = cleanList(ctx.recentQuestions, 15, 160)
+  const topic = clean(ctx.topic, 80)
+  const nameLine = name
+    ? `Her name is ${name}. Always call her ${name}, never anything else.`
+    : `You do not know her name yet. NEVER guess or invent a name for her; if it comes up naturally you may ask once.`
+  return `# Who she is
+${nameLine}
+Things she has told you before${name ? ` (any other names below belong to other people or pets, not to ${name})` : ' (names below belong to other people or pets, not to her)'}:
+${facts.length ? facts.map((f) => `- ${f}`).join('\n') : '- (nothing yet)'}
+
+# Keep the conversation fresh
+- Today's suggested topic: ${topic || 'anything simple from daily life'}. After the greeting, open with it; if she wants to talk about something else, follow her.
+- Questions you already asked her in recent lessons — do NOT ask these again:
+${asked.length ? asked.map((q) => `  - ${q}`).join('\n') : '  - (none yet)'}
+- Never ask something she has already answered, in this conversation or in the list above.
+- Mention a remembered fact at most once per conversation, only when it truly fits. Do NOT keep returning to the same person, pet or subject.
+- Each question should move forward: a new detail or a new subject, never a rephrasing of an earlier question. After two or three exchanges on one subject, move on to something new.`
+}
+
 function realtimeInstructions(
-  facts: string[],
+  ctx: LearnerContext,
   feedbackLang: 'en' | 'he',
   level: string,
 ): string {
   const tipLang = feedbackLang === 'he' ? 'Hebrew' : 'English'
-  const known = facts.length ? facts.map((f) => `- ${f}`).join('\n') : '- (nothing yet)'
+  const name = clean(ctx.name, 40)
   return `# Role
 You are Ana, a warm, patient Romanian conversation partner on a live voice call with an adult beginner (level ${level}). Her other languages are English and Hebrew.
 
-# What you know about her
-${known}
+${aboutHer(ctx)}
 
 # Your only job: a pleasant, flowing conversation
-- Start by greeting her warmly in simple Romanian${facts.length ? ', using what you know about her' : ''}, and ask one easy question.
+- Start with a short warm greeting in simple Romanian${name ? ` using her name, ${name}` : ''}, then ask one easy question about today's topic.
 - Speak simple Romanian at her level: short sentences, slowly and clearly. Ask ONE question at a time.
-- Keep your turns brief (1-2 sentences) so she does most of the talking.
+- Keep your turns brief (1-2 sentences) so she does most of the talking. It's a chat, not an interview: react to her answer (sometimes share a little about yourself) before asking something new.
 - React to what she MEANS, even if her Romanian is imperfect. Beginners pause while thinking; be patient.
 
 # Corrections: NEVER out loud
@@ -241,7 +281,10 @@ ${known}
 - If she seems lost, help briefly in ${tipLang}, then return to Romanian.
 
 # Memory
-- When she shares a lasting personal fact (names, pets, family, interests, plans), call remember_fact with a short English sentence and keep talking naturally. Never mention that you are saving it.`
+- When she shares a NEW lasting personal fact (family, pets, interests, plans) that is not already listed above, call remember_fact with a short English sentence and keep talking naturally. Never mention that you are saving it.
+- If it updates or corrects a listed fact, put that old fact, copied exactly, in "replaces".
+- If she tells you her own name, also put it in "her_name".
+- If you were cut off mid-sentence and she then says something, just answer what she said; do not restart your sentence or change the subject.`
 }
 
 /** Mint a short-lived client key for an OpenAI Realtime WebRTC session. */
@@ -251,7 +294,7 @@ async function realtimeSession(
   cfg: AppConfig,
 ): Promise<{ value: string; model: string; version: string; turnDetection: Record<string, unknown> }> {
   const instructions = realtimeInstructions(
-    (req.facts ?? []).slice(-40),
+    req,
     req.feedbackLang === 'he' ? 'he' : 'en',
     req.level || 'A1',
   )
@@ -301,11 +344,19 @@ async function realtimeSession(
               type: 'function',
               name: 'remember_fact',
               description:
-                'Save one lasting personal fact the learner shared (a name, pet, family member, interest, or plan) so you remember it in future lessons.',
+                'Save one NEW lasting personal fact the learner shared (family member, pet, interest, plan, or her own name) so you remember it in future lessons. Do not save facts that are already known.',
               parameters: {
                 type: 'object',
                 properties: {
-                  fact: { type: 'string', description: 'A short English sentence.' },
+                  fact: { type: 'string', description: 'A short English sentence, e.g. "Her son David lives in Haifa."' },
+                  replaces: {
+                    type: 'string',
+                    description: 'Only if this corrects or updates a known fact: that old fact, copied exactly.',
+                  },
+                  her_name: {
+                    type: 'string',
+                    description: 'Only if she told you her OWN name: the name, as she said it.',
+                  },
                 },
                 required: ['fact'],
               },
@@ -511,35 +562,35 @@ interface ConverseReply {
   translation: string | null
   correction: string | null
   remember: string | null
+  replaces: string | null
+  herName: string | null
 }
 
 function conversePrompt(req: ConverseRequest): string {
   const tipLang = req.feedbackLang === 'he' ? 'Hebrew' : 'English'
-  const historyText = req.history
-    .slice(-12)
+  const historyText = (Array.isArray(req.history) ? req.history : [])
+    .slice(-24)
     .map((t) => `${t.role === 'user' ? 'Student' : 'You'}: ${t.text}`)
     .join('\n')
-  const factsText = (req.facts ?? []).slice(-40).map((f) => `- ${f}`).join('\n')
+  const name = clean(req.name, 40)
 
   const prompt = `You are Ana, a warm private Romanian tutor for an adult beginner. Her other languages are English and Hebrew, and she may speak or type in any of the three.
 
-What you know about her from earlier conversations (long-term memory):
-${factsText || '(nothing yet)'}
+${aboutHer(req)}
 
-Conversation so far:
-${historyText || '(the conversation is just starting — greet her warmly, use what you know about her, and ask something easy)'}
+# Conversation so far
+${historyText || `(the conversation is just starting — greet her warmly${name ? ` by name (${name})` : ''} and ask one easy question about today's topic)`}
 
 Student's new turn: ${req.audio ? '(attached as audio — listen to it yourself)' : `"${req.text ?? ''}"`}
 
 How to behave:
-- When she is conversing in Romanian, reply in very simple A1-level Romanian, short (max 15 words), react warmly to what she said, and end with ONE simple question.
+- When she is conversing in Romanian, reply in very simple A1-level Romanian, short (max 15 words), and react to what she actually said. Usually end with ONE simple new question, but not always — sometimes share a short thing about yourself instead, like a real conversation, not an interview.
 - When she asks a question or asks for help (e.g. how to pronounce or say something, what a word means, a grammar question), answer as a helpful tutor in the SAME language she asked in (Hebrew question → Hebrew answer, English → English; if she asked in Romanian, use ${tipLang}): give the Romanian word(s), a "sounds like" hint for readers of that language, a short example, then invite her back into Romanian.
-- Use her personal facts naturally when relevant (her name, pets, family, interests).
 - EVERY TURN with audio, also check her Romanian pronunciation carefully: if any word was clearly mispronounced (wrong sound, wrong stress, missing syllable), name it in "correction" with how to say it right; if her pronunciation was good, "correction" is null — do not invent problems. Also flag grammar or word-choice errors there.
 - "heard" must be written in the language she actually spoke, in its normal spelling (Romanian in Romanian orthography, Hebrew in Hebrew letters, English in English). She only ever speaks Romanian, English, or Hebrew — never another language.
 
 Respond with ONLY this JSON (no markdown):
-{"heard": ${req.audio ? '"<exactly what she said, written in the language she spoke>"' : 'null'}, "reply": "<your reply>", "replyLang": "<ro|en|he — the main language of your reply>", "translation": <if your reply is Romanian, its Hebrew translation, else null>, "heardTranslation": <if what she said was Romanian, its Hebrew translation, else null>, "correction": <short friendly note in ${tipLang}, else null>, "remember": <ONE new lasting personal fact she shared this turn (a name, pet, family member, preference), phrased as a short English sentence, else null>}`
+{"heard": ${req.audio ? '"<exactly what she said, written in the language she spoke>"' : 'null'}, "reply": "<your reply>", "replyLang": "<ro|en|he — the main language of your reply>", "translation": <if your reply is Romanian, its Hebrew translation, else null>, "heardTranslation": <if what she said was Romanian, its Hebrew translation, else null>, "correction": <short friendly note in ${tipLang}, else null>, "remember": <ONE NEW lasting personal fact she shared this turn (family member, pet, interest, plan) that is not already listed above, as a short English sentence, else null>, "replaces": <if "remember" updates or corrects a listed fact, that old fact copied exactly, else null>, "herName": <if she told you her OWN name this turn, the name, else null>}`
 
   return prompt
 }
@@ -554,6 +605,8 @@ function parseConverse(parsed: Record<string, unknown>): ConverseReply {
     translation: parsed.translation ? String(parsed.translation) : null,
     correction: parsed.correction ? String(parsed.correction) : null,
     remember: parsed.remember ? String(parsed.remember) : null,
+    replaces: parsed.replaces ? String(parsed.replaces) : null,
+    herName: parsed.herName ? String(parsed.herName) : null,
   }
 }
 

@@ -99,12 +99,25 @@ export interface ConverseResult {
   translation: string | null
   correction: string | null
   remember: string | null
+  /** an older fact the new one updates */
+  replaces: string | null
+  /** her own name, if she said it */
+  herName: string | null
+}
+
+/** What Ana knows about her, from memory.ts */
+export interface LearnerContext {
+  name: string
+  facts: string[]
+  recentQuestions: string[]
+  /** suggested subject for this lesson */
+  topic: string
 }
 
 export async function converseTurn(
   input: { audio: Blob } | { text: string },
   history: ChatTurn[],
-  facts: string[],
+  about: LearnerContext,
   feedbackLang: 'en' | 'he',
 ): Promise<ConverseResult> {
   const { data: sessionData } = await supabase.auth.getSession()
@@ -112,8 +125,9 @@ export async function converseTurn(
 
   const body: Record<string, unknown> = {
     action: 'converse',
-    history: history.slice(-12).map(({ role, text }) => ({ role, text })),
-    facts: facts.slice(-40),
+    history: history.slice(-24).map(({ role, text }) => ({ role, text })),
+    ...about,
+    facts: about.facts.slice(-40),
     feedbackLang,
   }
   if ('audio' in input) {
@@ -150,6 +164,8 @@ export async function converseTurn(
     translation: data.translation ? String(data.translation) : null,
     correction: data.correction ? String(data.correction) : null,
     remember: data.remember ? String(data.remember) : null,
+    replaces: data.replaces ? String(data.replaces) : null,
+    herName: data.herName ? String(data.herName) : null,
   }
 }
 
@@ -218,7 +234,7 @@ export async function translateToHebrew(texts: string[]): Promise<(string | null
 }
 
 /** Must match FUNCTION_VERSION in supabase/functions/tutor/index.ts. */
-export const EXPECTED_FUNCTION_VERSION = '2026-09-27.2'
+export const EXPECTED_FUNCTION_VERSION = '2026-09-28.1'
 
 export async function deployedFunctionVersion(): Promise<string | null> {
   const { data, error } = await supabase.functions.invoke('tutor', { body: { action: 'version' } })
