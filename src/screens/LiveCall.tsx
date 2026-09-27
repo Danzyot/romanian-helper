@@ -230,6 +230,10 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   }
 
   const hangUp = () => callRef.current?.hangUp()
+  const stopAna = () => {
+    callRef.current?.stopAna()
+    logEvent('call_stop_ana')
+  }
 
   const toggleMute = () => {
     const next = !muted
@@ -270,9 +274,14 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
 
   return (
     <div className="card call-card live">
-      <div className={`call-avatar${speaking === 'tutor' ? ' speaking' : ''}`} aria-hidden>
+      <button
+        className={`call-avatar${speaking === 'tutor' ? ' speaking' : ''}`}
+        aria-label={s.callStop}
+        onClick={stopAna}
+        disabled={status !== 'live'}
+      >
         A
-      </div>
+      </button>
       <p className="call-status">
         {status === 'connecting'
           ? s.callConnecting
@@ -309,6 +318,14 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
         )}
         <div ref={capsEndRef} />
       </div>
+
+      <button
+        className={`btn call-stop${speaking === 'tutor' ? ' active' : ''}`}
+        onClick={stopAna}
+        disabled={status !== 'live'}
+      >
+        ✋ {s.callStop}
+      </button>
 
       <div className="call-buttons">
         <button className="btn subtle" onClick={toggleMute} disabled={status !== 'live'}>

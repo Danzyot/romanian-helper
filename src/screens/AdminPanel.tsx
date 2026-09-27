@@ -37,6 +37,26 @@ const FIELDS: {
     ],
   },
   {
+    key: 'realtime_barge_in',
+    label: 'Live call: can talking interrupt Ana?',
+    help: 'Off: only the Stop button cuts her off, so background voices and TV can’t. On: talking over her stops her, like a phone call (more sensitive to noise).',
+    options: [
+      { value: '', label: 'Default (off: Stop button only)' },
+      { value: 'off', label: 'Off: Stop button only' },
+      { value: 'on', label: 'On: talking interrupts her' },
+    ],
+  },
+  {
+    key: 'realtime_noise',
+    label: 'Live call: noise filter',
+    help: 'Match how the phone is used during calls.',
+    options: [
+      { value: '', label: 'Default (phone held close)' },
+      { value: 'near_field', label: 'Phone held close / earphones' },
+      { value: 'far_field', label: 'Phone on the table / speaker far away' },
+    ],
+  },
+  {
     key: 'chat_provider',
     label: 'Typed/recorded chat: which AI',
     help: 'The Talk chat (not the live call). The other AI takes over automatically if this one fails.',

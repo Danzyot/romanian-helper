@@ -11,7 +11,7 @@
 // GEMINI_API_KEY under Edge Functions → Secrets.
 
 /** Bump on every change so the app can tell when this deploy is outdated. */
-const FUNCTION_VERSION = '2026-09-25.1'
+const FUNCTION_VERSION = '2026-09-27.1'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -173,7 +173,16 @@ Respond with ONLY this JSON: {"translations": [<Hebrew string or null, one per l
 
 /** Admin-set overrides from the app_config table (see supabase/schema.sql). */
 type AppConfig = Partial<
-  Record<'realtime_model' | 'realtime_voice' | 'gemini_model' | 'chat_provider' | 'chat_openai_model', string>
+  Record<
+    | 'realtime_model'
+    | 'realtime_voice'
+    | 'realtime_barge_in'
+    | 'realtime_noise'
+    | 'gemini_model'
+    | 'chat_provider'
+    | 'chat_openai_model',
+    string
+  >
 >
 
 /** Read app_config with the caller's own credentials; any failure → defaults. */
@@ -268,8 +277,19 @@ async function realtimeSession(
                   'Romanian language practice. A beginner speaking mostly Romanian, sometimes English or Hebrew.',
               },
               // low eagerness: wait longer before deciding she has finished,
-              // so Ana does not cut in while a beginner pauses to think
-              turn_detection: { type: 'semantic_vad', eagerness: 'low' },
+              // so Ana does not cut in while a beginner pauses to think.
+              // No voice barge-in by default: background talk or a TV would
+              // otherwise cut Ana off mid-sentence; the app has a Stop button.
+              turn_detection: {
+                type: 'semantic_vad',
+                eagerness: 'low',
+                interrupt_response: cfg.realtime_barge_in === 'on',
+              },
+              // filter room noise before speech detection; near_field suits a
+              // phone held close, far_field a phone on the table
+              noise_reduction: {
+                type: cfg.realtime_noise === 'far_field' ? 'far_field' : 'near_field',
+              },
             },
             output: { voice: cfg.realtime_voice || Deno.env.get('OPENAI_REALTIME_VOICE') || 'marin' },
           },

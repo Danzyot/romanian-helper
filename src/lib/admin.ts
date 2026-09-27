@@ -5,6 +5,8 @@ import { supabase } from './sync'
 export type ConfigKey =
   | 'realtime_model'
   | 'realtime_voice'
+  | 'realtime_barge_in'
+  | 'realtime_noise'
   | 'gemini_model'
   | 'chat_provider'
   | 'chat_openai_model'

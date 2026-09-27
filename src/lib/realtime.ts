@@ -33,6 +33,8 @@ export interface CallNote {
 
 export interface LiveCall {
   hangUp: () => void
+  /** cut Ana off mid-sentence and drop the rest of her reply */
+  stopAna: () => void
   setMuted: (muted: boolean) => void
   model: string
   /** deployed tutor-function version, to detect a stale deploy */
@@ -230,8 +232,15 @@ export async function startLiveCall(
     throw e
   }
 
+  const stopAna = () => {
+    send({ type: 'response.cancel' }) // stop generating
+    send({ type: 'output_audio_buffer.clear' }) // drop audio already queued for playback
+    h.onSpeaking(null)
+  }
+
   return {
     hangUp,
+    stopAna,
     setMuted: (muted) => mic.getAudioTracks().forEach((t) => (t.enabled = !muted)),
     model,
     version,

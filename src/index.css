@@ -1237,3 +1237,23 @@ input:focus-visible {
   font-family: var(--serif);
   color: var(--red);
 }
+
+/* ——— Stop Ana ——— */
+button.call-avatar {
+  border: none;
+  cursor: pointer;
+}
+
+.call-stop {
+  width: 100%;
+  background: var(--card);
+  color: var(--ink-soft);
+  border: 2px solid var(--card-line);
+  font-size: 1.15rem;
+}
+
+.call-stop.active {
+  background: #c07f10;
+  border-color: #c07f10;
+  color: var(--paper);
+}
