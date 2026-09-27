@@ -1263,3 +1263,10 @@ button.call-avatar {
   background: var(--green);
   font-size: 1.15rem;
 }
+
+.call-unblock {
+  width: 100%;
+  background: var(--blue);
+  font-size: 1.15rem;
+  animation: call-pulse 1.1s infinite;
+}

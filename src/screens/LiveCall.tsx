@@ -50,6 +50,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   const [speaking, setSpeaking] = useState<'user' | 'tutor' | null>(null)
   const [muted, setMuted] = useState(false)
   const [paused, setPaused] = useState(false)
+  const [audioBlocked, setAudioBlocked] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [note, setNote] = useState<string | null>(null)
   const [callNotes, setCallNotes] = useState<CallNote[]>([])
@@ -158,11 +159,17 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     provisionalRef.current = new Map()
     translateOnArrivalRef.current = new Set()
     lastAnaLineRef.current = ''
-    // created during the tap so the phone lets it run
+    // created during the tap so the phone lets them run
     const captureCtx = new AudioContext()
+    const audioEl = document.createElement('audio')
+    audioEl.autoplay = true
+    audioEl.setAttribute('playsinline', '')
+    audioEl.hidden = true
+    document.body.appendChild(audioEl)
     notesCountRef.current = 0
     setMuted(false)
     setPaused(false)
+    setAudioBlocked(false)
     setElapsed(0)
     elapsedRef.current = 0
     loggedEndRef.current = false
@@ -170,7 +177,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     try {
       factsRef.current = await loadFacts()
       const call = await startLiveCall(
-        { facts: factsRef.current, feedbackLang: lang, level: effectiveLevel(), captureCtx },
+        { facts: factsRef.current, feedbackLang: lang, level: effectiveLevel(), captureCtx, audioEl },
         {
           onStatus: (st, detail) => {
             setStatus(st)
@@ -208,6 +215,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
           },
           onUtteranceSkipped: translateProvisional,
           onPaused: setPaused,
+          onAudioBlocked: setAudioBlocked,
           onTutorStopped: (id) => {
             setCaptions((caps) =>
               caps.map((c) => (c.id === id ? { ...c, text: `${c.text.trimEnd()} …` } : c)),
@@ -228,6 +236,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
       if (call.version !== EXPECTED_FUNCTION_VERSION) setNote(s.callOutdated)
     } catch (err: unknown) {
       void captureCtx.close().catch(() => {})
+      audioEl.remove()
       setStatus('error')
       if (err instanceof TutorError && err.kind === 'auth') setNote(s.tutorSignIn)
       else if (err instanceof DOMException && err.name === 'NotAllowedError') setNote(s.micDenied)
@@ -331,6 +340,12 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
         <div ref={capsEndRef} />
       </div>
 
+      {audioBlocked && (
+        <button className="btn call-unblock" onClick={() => callRef.current?.unblockAudio()}>
+          🔊 {s.callUnblock}
+        </button>
+      )}
+
       {paused ? (
         <button className="btn call-resume" onClick={resumeAna} disabled={status !== 'live'}>
           ▶ {s.callResume}
@@ -346,7 +361,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
       )}
 
       <div className="call-buttons">
-        <button className="btn subtle" onClick={toggleMute} disabled={status !== 'live'}>
+        <button className="btn subtle" onClick={toggleMute} disabled={status !== 'live' || paused}>
           {muted ? `🔇 ${s.callUnmute}` : `🎙️ ${s.callMute}`}
         </button>
         <button className="btn record" onClick={hangUp}>

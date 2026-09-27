@@ -27,6 +27,8 @@ export interface CallHandlers {
   onTutorStopped: (id: string) => void
   /** Ana was paused (Stop) or resumed */
   onPaused: (paused: boolean) => void
+  /** the phone refused to play Ana's audio; the UI should offer a tap */
+  onAudioBlocked: (blocked: boolean) => void
   /** an error event from OpenAI (logged for diagnosis) */
   onError: (code: string, message: string) => void
 }
@@ -41,8 +43,10 @@ export interface LiveCall {
   hangUp: () => void
   /** cut Ana off mid-sentence and keep her silent until resumeAna */
   stopAna: () => void
-  /** let Ana talk again; she answers whatever was said meanwhile */
+  /** let Ana talk again and turn the microphone back on */
   resumeAna: () => void
+  /** retry audio playback from a tap, when the phone blocked it */
+  unblockAudio: () => void
   setMuted: (muted: boolean) => void
   model: string
   /** deployed tutor-function version, to detect a stale deploy */
@@ -80,7 +84,14 @@ async function postSdp(sdp: string, key: string, model: string): Promise<string>
 }
 
 export async function startLiveCall(
-  opts: { facts: string[]; feedbackLang: 'en' | 'he'; level: string; captureCtx: AudioContext },
+  opts: {
+    facts: string[]
+    feedbackLang: 'en' | 'he'
+    level: string
+    captureCtx: AudioContext
+    /** created during the tap that starts the call, so the phone lets it play */
+    audioEl: HTMLAudioElement
+  },
   h: CallHandlers,
 ): Promise<LiveCall> {
   const { data: s } = await supabase.auth.getSession()
@@ -125,11 +136,26 @@ export async function startLiveCall(
   const stoppedItems = new Set<string>()
 
   const pc = new RTCPeerConnection()
-  const audioEl = new Audio()
-  audioEl.autoplay = true
+  const audioEl = opts.audioEl
+  audioEl.muted = false
+  audioEl.volume = 1
+  // Make sure Ana is audible. Phones may refuse playback that doesn't follow
+  // a tap; that used to fail silently. Now the UI is told so it can offer a
+  // "tap to hear Ana" button, and the reason is logged.
+  const ensurePlaying = () => {
+    audioEl.muted = paused
+    if (!audioEl.srcObject || !audioEl.paused) return
+    audioEl
+      .play()
+      .then(() => h.onAudioBlocked(false))
+      .catch((err: unknown) => {
+        h.onAudioBlocked(true)
+        h.onError('audio_play', err instanceof Error ? `${err.name}: ${err.message}` : String(err))
+      })
+  }
   pc.ontrack = (e) => {
     audioEl.srcObject = e.streams[0]
-    void audioEl.play().catch(() => {})
+    ensurePlaying()
   }
   mic.getTracks().forEach((t) => pc.addTrack(t, mic))
   const dc = pc.createDataChannel('oai-events')
@@ -146,6 +172,7 @@ export async function startLiveCall(
     capture.close()
     pc.close()
     audioEl.srcObject = null
+    audioEl.remove()
     h.onSpeaking(null)
   }
   const hangUp = () => {
@@ -212,6 +239,7 @@ export async function startLiveCall(
         if (!paused) {
           playingSince = Date.now()
           h.onSpeaking('tutor')
+          ensurePlaying()
         }
         break
       case 'output_audio_buffer.stopped':
@@ -292,11 +320,18 @@ export async function startLiveCall(
       },
     })
 
+  // the Mute button's choice; Stop/Resume override it while paused
+  let userMuted = false
+  const applyMic = () =>
+    mic.getAudioTracks().forEach((t) => (t.enabled = !userMuted && !paused))
+
   const stopAna = () => {
     if (paused) return
-    // 1. silence her on the phone immediately, whatever the server does
+    // 1. silence her on the phone immediately, whatever the server does,
+    //    and turn the microphone off too
     audioEl.muted = true
     paused = true
+    applyMic()
     h.onPaused(true)
     // no new replies until Resume
     setAutoReply(false)
@@ -323,7 +358,8 @@ export async function startLiveCall(
   const resumeAna = () => {
     if (!paused) return
     paused = false
-    audioEl.muted = false
+    applyMic()
+    ensurePlaying()
     h.onPaused(false)
     setAutoReply(true)
     send({ type: 'response.create' }) // pick the conversation back up
@@ -333,7 +369,19 @@ export async function startLiveCall(
     hangUp,
     stopAna,
     resumeAna,
-    setMuted: (muted) => mic.getAudioTracks().forEach((t) => (t.enabled = !muted)),
+    setMuted: (muted) => {
+      userMuted = muted
+      applyMic()
+    },
+    unblockAudio: () => {
+      audioEl.muted = paused
+      void audioEl
+        .play()
+        .then(() => h.onAudioBlocked(false))
+        .catch((err: unknown) =>
+          h.onError('audio_play', err instanceof Error ? `${err.name}: ${err.message}` : String(err)),
+        )
+    },
     model,
     version,
   }
