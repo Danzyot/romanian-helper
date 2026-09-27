@@ -68,9 +68,9 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   // hang up if she leaves the tab mid-call
   useEffect(() => () => callRef.current?.hangUp(), [])
 
-  // call timer + automatic cutoff
+  // call timer + automatic cutoff; paused time doesn't count
   useEffect(() => {
-    if (status !== 'live') return
+    if (status !== 'live' || paused) return
     const timer = setInterval(() => {
       elapsedRef.current += 1
       setElapsed(elapsedRef.current)
@@ -80,7 +80,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
       }
     }, 1000)
     return () => clearInterval(timer)
-  }, [status, s.callMaxReached])
+  }, [status, paused, s.callMaxReached])
 
   useEffect(() => {
     capsEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })

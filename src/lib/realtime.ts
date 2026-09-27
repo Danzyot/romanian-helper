@@ -361,8 +361,9 @@ export async function startLiveCall(
     applyMic()
     ensurePlaying()
     h.onPaused(false)
+    // she stays quiet: auto-replies come back on, so she answers only once
+    // the student speaks — no new message, no new topic
     setAutoReply(true)
-    send({ type: 'response.create' }) // pick the conversation back up
   }
 
   return {
