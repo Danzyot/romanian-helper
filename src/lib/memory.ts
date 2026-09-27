@@ -127,7 +127,7 @@ export async function loadMemory(): Promise<Memory> {
   const userId = await currentUserId()
   if (!userId) return EMPTY
   if (!cache || cache.userId !== userId) {
-    const memory = fetchMemory(userId).catch(() => {
+    const memory = fetchMemory(userId).then(tidy, () => {
       cache = null // retry next time rather than remembering a failure
       return EMPTY
     })
@@ -179,10 +179,27 @@ export function updateMemory(change: (m: Memory) => Memory): Promise<Memory> {
   return p
 }
 
+// facts that state her own name, e.g. "Her name is Sharon." / "She is called Sharon."
+const NAME_FACT =
+  /^(?:her|the (?:learner|student)'?s?|my)\s+(?:first\s+)?name\s+is\s+([\p{L}'’-]+(?:\s+[\p{L}'’-]+){0,2})\s*\.?$|^she\s+(?:is\s+called|goes\s+by)\s+([\p{L}'’-]+(?:\s+[\p{L}'’-]+){0,2})\s*\.?$/iu
+
+/**
+ * Her name lives in `name`, not among the facts: a name fact saved before
+ * the name field existed fills an empty name (the latest one wins), and name
+ * facts are then dropped so they can't contradict it.
+ */
 function tidy(m: Memory): Memory {
+  let name = m.name.trim()
+  if (!name) {
+    for (const f of m.facts) {
+      const match = f.trim().match(NAME_FACT)
+      if (match) name = (match[1] ?? match[2]).trim()
+    }
+  }
+  const facts = name ? m.facts.filter((f) => !NAME_FACT.test(f.trim())) : m.facts
   return {
-    name: m.name.trim().slice(0, 40),
-    facts: m.facts.slice(-MAX_FACTS),
+    name: name.slice(0, 40),
+    facts: facts.slice(-MAX_FACTS),
     recentQuestions: m.recentQuestions.slice(-MAX_QUESTIONS),
     recentTopics: m.recentTopics.slice(-MAX_TOPICS),
   }
