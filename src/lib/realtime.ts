@@ -23,6 +23,12 @@ export interface CallHandlers {
   onUtterance: (id: string, audio: Blob) => void
   /** the utterance was too short to check */
   onUtteranceSkipped: (id: string) => void
+  /** Ana's reply with this caption id was cut off by Stop */
+  onTutorStopped: (id: string) => void
+  /** Ana was paused (Stop) or resumed */
+  onPaused: (paused: boolean) => void
+  /** an error event from OpenAI (logged for diagnosis) */
+  onError: (code: string, message: string) => void
 }
 
 export interface CallNote {
@@ -33,8 +39,10 @@ export interface CallNote {
 
 export interface LiveCall {
   hangUp: () => void
-  /** cut Ana off mid-sentence and drop the rest of her reply */
+  /** cut Ana off mid-sentence and keep her silent until resumeAna */
   stopAna: () => void
+  /** let Ana talk again; she answers whatever was said meanwhile */
+  resumeAna: () => void
   setMuted: (muted: boolean) => void
   model: string
   /** deployed tutor-function version, to detect a stale deploy */
@@ -92,6 +100,11 @@ export async function startLiveCall(
   const key: string = data.value
   const model: string = data.model
   const version: string | null = data.version ?? null
+  const turnDetection: Record<string, unknown> = data.turnDetection ?? {
+    type: 'semantic_vad',
+    eagerness: 'low',
+    interrupt_response: false,
+  }
 
   const mic = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -99,6 +112,17 @@ export async function startLiveCall(
   const capture = new UtteranceCapture(opts.captureCtx)
   capture.attach(mic)
   let currentUserItem: string | null = null
+
+  // Pause bookkeeping. Stop mutes Ana on the phone at once and switches off
+  // her automatic replies on the server; while paused, any reply that starts
+  // anyway is cancelled and its leftovers are ignored. Only resumeAna
+  // unmutes her.
+  let paused = false
+  let currentResponseId: string | null = null
+  let currentTutorItem: string | null = null
+  let playingSince: number | null = null
+  const stoppedResponses = new Set<string>()
+  const stoppedItems = new Set<string>()
 
   const pc = new RTCPeerConnection()
   const audioEl = new Audio()
@@ -170,20 +194,46 @@ export async function startLiveCall(
         h.onCaption(ev.item_id, 'user', text ?? '🎤', false)
         break
       }
+      case 'response.created':
+        currentResponseId = ev.response?.id ?? null
+        if (paused && currentResponseId) {
+          // a reply started while paused: cancel it
+          stoppedResponses.add(currentResponseId)
+          send({ type: 'response.cancel', response_id: currentResponseId })
+          send({ type: 'output_audio_buffer.clear' })
+        }
+        break
+      case 'response.output_item.added':
+        if (ev.item?.role !== 'assistant' || !ev.item?.id) break
+        if (paused || stoppedResponses.has(ev.response_id)) stoppedItems.add(ev.item.id)
+        else currentTutorItem = ev.item.id
+        break
       case 'output_audio_buffer.started':
-        h.onSpeaking('tutor')
+        if (!paused) {
+          playingSince = Date.now()
+          h.onSpeaking('tutor')
+        }
         break
       case 'output_audio_buffer.stopped':
       case 'output_audio_buffer.cleared':
+        playingSince = null
         h.onSpeaking(null)
         break
       case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
-        if (ev.item_id && ev.delta) h.onCaption(ev.item_id, 'tutor', ev.delta, true)
+        if (!ev.item_id || !ev.delta || stoppedItems.has(ev.item_id)) break
+        if (paused || stoppedResponses.has(ev.response_id)) {
+          stoppedItems.add(ev.item_id)
+          break
+        }
+        currentTutorItem = ev.item_id
+        h.onCaption(ev.item_id, 'tutor', ev.delta, true)
         break
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done':
-        if (ev.item_id && ev.transcript) h.onCaptionDone(ev.item_id, 'tutor', ev.transcript)
+        if (ev.item_id && ev.transcript && !stoppedItems.has(ev.item_id)) {
+          h.onCaptionDone(ev.item_id, 'tutor', ev.transcript)
+        }
         break
       case 'response.function_call_arguments.done':
         try {
@@ -204,13 +254,14 @@ export async function startLiveCall(
       case 'response.done': {
         // a response that was only a tool call leaves Ana silent — nudge her on
         const out: { type?: string }[] = ev.response?.output ?? []
-        if (out.length > 0 && out.every((o) => o.type === 'function_call')) {
+        if (!paused && out.length > 0 && out.every((o) => o.type === 'function_call')) {
           send({ type: 'response.create' })
         }
         break
       }
       case 'error':
         console.warn('realtime error', ev.error)
+        h.onError(String(ev.error?.code ?? ev.error?.type ?? 'unknown'), String(ev.error?.message ?? ''))
         break
     }
   }
@@ -232,15 +283,56 @@ export async function startLiveCall(
     throw e
   }
 
+  const setAutoReply = (on: boolean) =>
+    send({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: { input: { turn_detection: { ...turnDetection, create_response: on } } },
+      },
+    })
+
   const stopAna = () => {
-    send({ type: 'response.cancel' }) // stop generating
-    send({ type: 'output_audio_buffer.clear' }) // drop audio already queued for playback
+    if (paused) return
+    // 1. silence her on the phone immediately, whatever the server does
+    audioEl.muted = true
+    paused = true
+    h.onPaused(true)
+    // no new replies until Resume
+    setAutoReply(false)
+    if (currentResponseId) stoppedResponses.add(currentResponseId)
+    // only a sentence she was actually in the middle of gets cut and marked
+    const item = currentTutorItem && !stoppedItems.has(currentTutorItem) ? currentTutorItem : null
+    currentTutorItem = null
+    const playedMs = playingSince ? Date.now() - playingSince : null
+    playingSince = null
+    if (item) {
+      stoppedItems.add(item)
+      h.onTutorStopped(item)
+    }
     h.onSpeaking(null)
+    // 2. ask the server to stop generating and drop queued audio
+    send(currentResponseId ? { type: 'response.cancel', response_id: currentResponseId } : { type: 'response.cancel' })
+    send({ type: 'output_audio_buffer.clear' })
+    // 3. tell the model where she was cut off, so it knows she didn't finish
+    if (item && playedMs !== null) {
+      send({ type: 'conversation.item.truncate', item_id: item, content_index: 0, audio_end_ms: playedMs })
+    }
+  }
+
+  const resumeAna = () => {
+    if (!paused) return
+    paused = false
+    audioEl.muted = false
+    h.onPaused(false)
+    setAutoReply(true)
+    send({ type: 'response.create' }) // pick the conversation back up
   }
 
   return {
     hangUp,
     stopAna,
+    resumeAna,
     setMuted: (muted) => mic.getAudioTracks().forEach((t) => (t.enabled = !muted)),
     model,
     version,

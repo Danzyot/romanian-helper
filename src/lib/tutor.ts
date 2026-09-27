@@ -218,7 +218,7 @@ export async function translateToHebrew(texts: string[]): Promise<(string | null
 }
 
 /** Must match FUNCTION_VERSION in supabase/functions/tutor/index.ts. */
-export const EXPECTED_FUNCTION_VERSION = '2026-09-27.1'
+export const EXPECTED_FUNCTION_VERSION = '2026-09-27.2'
 
 export async function deployedFunctionVersion(): Promise<string | null> {
   const { data, error } = await supabase.functions.invoke('tutor', { body: { action: 'version' } })

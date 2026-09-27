@@ -49,6 +49,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   const [captions, setCaptions] = useState<Caption[]>([])
   const [speaking, setSpeaking] = useState<'user' | 'tutor' | null>(null)
   const [muted, setMuted] = useState(false)
+  const [paused, setPaused] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [note, setNote] = useState<string | null>(null)
   const [callNotes, setCallNotes] = useState<CallNote[]>([])
@@ -161,6 +162,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     const captureCtx = new AudioContext()
     notesCountRef.current = 0
     setMuted(false)
+    setPaused(false)
     setElapsed(0)
     elapsedRef.current = 0
     loggedEndRef.current = false
@@ -205,6 +207,13 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
               .catch(() => translateProvisional(id))
           },
           onUtteranceSkipped: translateProvisional,
+          onPaused: setPaused,
+          onTutorStopped: (id) => {
+            setCaptions((caps) =>
+              caps.map((c) => (c.id === id ? { ...c, text: `${c.text.trimEnd()} …` } : c)),
+            )
+          },
+          onError: (code, message) => logEvent('call_error', { code, message: message.slice(0, 300) }),
           onRemember: (fact) => {
             const next = addFact(factsRef.current, fact)
             if (next !== factsRef.current) {
@@ -234,6 +243,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     callRef.current?.stopAna()
     logEvent('call_stop_ana')
   }
+  const resumeAna = () => callRef.current?.resumeAna()
 
   const toggleMute = () => {
     const next = !muted
@@ -285,7 +295,9 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
       <p className="call-status">
         {status === 'connecting'
           ? s.callConnecting
-          : speaking === 'tutor'
+          : paused
+            ? s.callPaused
+            : speaking === 'tutor'
             ? s.callAnaSpeaking
             : speaking === 'user'
               ? s.callYouSpeaking
@@ -319,13 +331,19 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
         <div ref={capsEndRef} />
       </div>
 
-      <button
-        className={`btn call-stop${speaking === 'tutor' ? ' active' : ''}`}
-        onClick={stopAna}
-        disabled={status !== 'live'}
-      >
-        ✋ {s.callStop}
-      </button>
+      {paused ? (
+        <button className="btn call-resume" onClick={resumeAna} disabled={status !== 'live'}>
+          ▶ {s.callResume}
+        </button>
+      ) : (
+        <button
+          className={`btn call-stop${speaking === 'tutor' ? ' active' : ''}`}
+          onClick={stopAna}
+          disabled={status !== 'live'}
+        >
+          ✋ {s.callStop}
+        </button>
+      )}
 
       <div className="call-buttons">
         <button className="btn subtle" onClick={toggleMute} disabled={status !== 'live'}>

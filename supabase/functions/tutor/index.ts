@@ -11,7 +11,7 @@
 // GEMINI_API_KEY under Edge Functions → Secrets.
 
 /** Bump on every change so the app can tell when this deploy is outdated. */
-const FUNCTION_VERSION = '2026-09-27.1'
+const FUNCTION_VERSION = '2026-09-27.2'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -249,12 +249,23 @@ async function realtimeSession(
   req: RealtimeRequest,
   key: string,
   cfg: AppConfig,
-): Promise<{ value: string; model: string; version: string }> {
+): Promise<{ value: string; model: string; version: string; turnDetection: Record<string, unknown> }> {
   const instructions = realtimeInstructions(
     (req.facts ?? []).slice(-40),
     req.feedbackLang === 'he' ? 'he' : 'en',
     req.level || 'A1',
   )
+  // low eagerness: wait longer before deciding she has finished, so Ana does
+  // not cut in while a beginner pauses to think. No voice barge-in by
+  // default: background talk or a TV would otherwise cut Ana off; the app has
+  // a Stop button. Returned to the app, which toggles create_response to
+  // pause and resume Ana.
+  const turnDetection = {
+    type: 'semantic_vad',
+    eagerness: 'low',
+    create_response: true,
+    interrupt_response: cfg.realtime_barge_in === 'on',
+  }
   const configured = cfg.realtime_model || Deno.env.get('OPENAI_REALTIME_MODEL')
   const models = [configured, 'gpt-realtime-mini', 'gpt-realtime'].filter(
     (m, i, all): m is string => !!m && all.indexOf(m) === i,
@@ -276,15 +287,7 @@ async function realtimeSession(
                 prompt:
                   'Romanian language practice. A beginner speaking mostly Romanian, sometimes English or Hebrew.',
               },
-              // low eagerness: wait longer before deciding she has finished,
-              // so Ana does not cut in while a beginner pauses to think.
-              // No voice barge-in by default: background talk or a TV would
-              // otherwise cut Ana off mid-sentence; the app has a Stop button.
-              turn_detection: {
-                type: 'semantic_vad',
-                eagerness: 'low',
-                interrupt_response: cfg.realtime_barge_in === 'on',
-              },
+              turn_detection: turnDetection,
               // filter room noise before speech detection; near_field suits a
               // phone held close, far_field a phone on the table
               noise_reduction: {
@@ -315,7 +318,7 @@ async function realtimeSession(
     if (res.ok) {
       const data = await res.json()
       const value = data.value ?? data.client_secret?.value
-      if (value) return { value, model, version: FUNCTION_VERSION }
+      if (value) return { value, model, version: FUNCTION_VERSION, turnDetection }
       errors.push(`${model}: no client secret in reply`)
       continue
     }

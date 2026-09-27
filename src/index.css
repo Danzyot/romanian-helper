@@ -1257,3 +1257,9 @@ button.call-avatar {
   border-color: #c07f10;
   color: var(--paper);
 }
+
+.call-resume {
+  width: 100%;
+  background: var(--green);
+  font-size: 1.15rem;
+}
