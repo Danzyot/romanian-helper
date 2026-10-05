@@ -1313,6 +1313,40 @@ button.call-avatar {
   font-size: 1.15rem;
 }
 
+.call-done {
+  width: 100%;
+  background: var(--card);
+  color: var(--green);
+  border: 2px solid var(--green);
+  font-size: 1.25rem;
+  padding-block: 1rem;
+}
+
+.call-done.ready {
+  background: var(--green);
+  color: var(--paper);
+}
+
+/* how Ana knows she has finished */
+.call-turn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+}
+
+.call-turn-label,
+.call-turn-help {
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+.call-turn .level-options {
+  justify-content: center;
+}
+
 .call-unblock {
   width: 100%;
   background: var(--blue);

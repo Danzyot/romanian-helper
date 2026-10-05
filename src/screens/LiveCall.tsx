@@ -8,7 +8,9 @@ import {
   type CallNote,
   type CallStatus,
   type LiveCall,
+  type TurnMode,
 } from '../lib/realtime'
+import { getSettings, updateSettings } from '../lib/settings'
 import { logEvent } from '../lib/telemetry'
 import {
   EXPECTED_FUNCTION_VERSION,
@@ -50,6 +52,8 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
   const [speaking, setSpeaking] = useState<'user' | 'tutor' | null>(null)
   const [muted, setMuted] = useState(false)
   const [paused, setPaused] = useState(false)
+  const [turnMode, setTurnModeState] = useState<TurnMode>(() => getSettings().callTurnMode)
+  const [turnReady, setTurnReady] = useState(false)
   const [audioBlocked, setAudioBlocked] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [note, setNote] = useState<string | null>(null)
@@ -173,6 +177,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     notesCountRef.current = 0
     setMuted(false)
     setPaused(false)
+    setTurnReady(false)
     setAudioBlocked(false)
     setElapsed(0)
     elapsedRef.current = 0
@@ -184,7 +189,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
       const topic = pickTopic(memory)
       void updateMemory((m) => withTopic(m, topic))
       const call = await startLiveCall(
-        { about: tutorContext(memory, topic), feedbackLang: lang, level: effectiveLevel(), captureCtx, audioEl },
+        { about: tutorContext(memory, topic), feedbackLang: lang, level: effectiveLevel(), captureCtx, audioEl, turnMode },
         {
           onStatus: (st, detail) => {
             setStatus(st)
@@ -225,6 +230,9 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
           },
           onUtteranceSkipped: translateProvisional,
           onPaused: setPaused,
+          onTurnReady: setTurnReady,
+          // Ana started too soon and gave way: drop her false start
+          onTutorYielded: (id) => setCaptions((caps) => caps.filter((c) => c.id !== id)),
           onAudioBlocked: setAudioBlocked,
           onTutorStopped: (id) => {
             setCaptions((caps) =>
@@ -257,6 +265,27 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
     logEvent('call_stop_ana')
   }
   const resumeAna = () => callRef.current?.resumeAna()
+  const finishTurn = () => callRef.current?.finishTurn()
+  const chooseTurnMode = (mode: TurnMode) => {
+    setTurnModeState(mode)
+    updateSettings({ callTurnMode: mode })
+    callRef.current?.setTurnMode(mode)
+    logEvent('call_turn_mode', { mode })
+  }
+
+  const turnPicker = (
+    <div className="call-turn">
+      <span className="call-turn-label">{s.callTurnLabel}</span>
+      <div className="level-options">
+        {(['tap', 'auto'] as const).map((m) => (
+          <button key={m} className={turnMode === m ? 'chip on' : 'chip'} onClick={() => chooseTurnMode(m)}>
+            {m === 'tap' ? `✅ ${s.callTurnTap}` : `🤖 ${s.callTurnAuto}`}
+          </button>
+        ))}
+      </div>
+      <p className="call-turn-help">{turnMode === 'tap' ? s.callTurnHelpTap : s.callTurnHelpAuto}</p>
+    </div>
+  )
 
   const toggleMute = () => {
     const next = !muted
@@ -290,6 +319,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
           📞 {status === 'ended' ? s.callAgain : s.callAna}
         </button>
         <p className="call-sub">{s.callSub}</p>
+        {turnPicker}
         {note && <p className="notice">{note}</p>}
       </div>
     )
@@ -314,7 +344,9 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
             ? s.callAnaSpeaking
             : speaking === 'user'
               ? s.callYouSpeaking
-              : s.callListening}
+              : turnMode === 'tap'
+                ? s.callTapListening
+                : s.callListening}
       </p>
       {status === 'live' && <p className="call-timer">{mmss(elapsed)}</p>}
 
@@ -350,6 +382,16 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
         </button>
       )}
 
+      {turnMode === 'tap' && !paused && (
+        <button
+          className={`btn call-done${turnReady && speaking !== 'tutor' ? ' ready' : ''}`}
+          onClick={finishTurn}
+          disabled={status !== 'live' || speaking === 'tutor'}
+        >
+          ✅ {s.callDone}
+        </button>
+      )}
+
       {paused ? (
         <button className="btn call-resume" onClick={resumeAna} disabled={status !== 'live'}>
           ▶ {s.callResume}
@@ -372,6 +414,7 @@ export default function LiveCallPanel({ lang, s, onActiveChange }: Props) {
           ⏹ {s.callHangUp}
         </button>
       </div>
+      {turnPicker}
       {note && <p className="notice">{note}</p>}
     </div>
   )

@@ -7,6 +7,8 @@ export interface Settings {
   quizLength: number
   /** playback rate for the slow listen button */
   slowRate: number
+  /** live call: Ana answers when she taps Done, or by herself */
+  callTurnMode: 'tap' | 'auto'
 }
 
 const KEY = 'romanian-helper:settings:v1'
@@ -15,6 +17,7 @@ const DEFAULTS: Settings = {
   levelMode: 'auto',
   quizLength: 10,
   slowRate: 0.6,
+  callTurnMode: 'tap',
 }
 
 export function getSettings(): Settings {

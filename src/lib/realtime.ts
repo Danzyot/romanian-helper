@@ -28,6 +28,10 @@ export interface CallHandlers {
   onTutorStopped: (id: string) => void
   /** Ana was paused (Stop) or resumed */
   onPaused: (paused: boolean) => void
+  /** Ana's reply was dropped because the student kept talking */
+  onTutorYielded: (itemId: string) => void
+  /** tap mode: whether there is something for Ana to answer */
+  onTurnReady: (ready: boolean) => void
   /** the phone refused to play Ana's audio; the UI should offer a tap */
   onAudioBlocked: (blocked: boolean) => void
   /** an error event from OpenAI (logged for diagnosis) */
@@ -46,6 +50,9 @@ export interface LiveCall {
   stopAna: () => void
   /** let Ana talk again and turn the microphone back on */
   resumeAna: () => void
+  /** tap mode: she has finished talking, Ana may answer now */
+  finishTurn: () => void
+  setTurnMode: (mode: TurnMode) => void
   /** retry audio playback from a tap, when the phone blocked it */
   unblockAudio: () => void
   setMuted: (muted: boolean) => void
@@ -84,6 +91,11 @@ async function postSdp(sdp: string, key: string, model: string): Promise<string>
   throw new TutorError('failed', `realtime connect ${last}`)
 }
 
+export type TurnMode = 'tap' | 'auto'
+
+/** auto mode: if she speaks again this soon after Ana starts, Ana yields */
+const YIELD_WINDOW_MS = 1500
+
 export async function startLiveCall(
   opts: {
     about: LearnerContext
@@ -92,6 +104,8 @@ export async function startLiveCall(
     captureCtx: AudioContext
     /** created during the tap that starts the call, so the phone lets it play */
     audioEl: HTMLAudioElement
+    /** 'tap': Ana answers only when she taps Done; 'auto': when Ana thinks she finished */
+    turnMode: TurnMode
   },
   h: CallHandlers,
 ): Promise<LiveCall> {
@@ -130,6 +144,13 @@ export async function startLiveCall(
   // anyway is cancelled and its leftovers are ignored. Only resumeAna
   // unmutes her.
   let paused = false
+  let turnMode: TurnMode = opts.turnMode
+  // Ana replies by herself only in auto mode, and never while paused
+  const autoReplyOn = () => !paused && turnMode === 'auto'
+  let userSpeaking = false
+  let responding = false
+  // tap mode: she has spoken since Ana's last reply
+  let saidSomething = false
   let currentResponseId: string | null = null
   let currentTutorItem: string | null = null
   let playingSince: number | null = null
@@ -188,7 +209,46 @@ export async function startLiveCall(
 
   dc.onopen = () => {
     h.onStatus('live')
+    setAutoReply(autoReplyOn())
     send({ type: 'response.create' }) // Ana greets first
+  }
+
+  // the utterance she just finished goes to the pronunciation checker
+  const endUtterance = (itemId: string | null) => {
+    userSpeaking = false
+    if (playingSince === null) h.onSpeaking(null)
+    if (!itemId) return
+    void capture.cut().then((wav) => {
+      if (wav) h.onUtterance(itemId, wav)
+      else h.onUtteranceSkipped(itemId)
+    })
+  }
+
+  // Cut Ana off without pausing: she started answering, but the student is
+  // still talking (she only paused to think). Ana's reply is dropped and
+  // she answers again once the student is done, with everything she said.
+  const yieldToStudent = () => {
+    // tap mode: she said she was done, so a noise must not cut Ana off
+    if (turnMode !== 'auto' || paused) return
+    if (!responding && playingSince === null) return
+    if (playingSince !== null && Date.now() - playingSince > YIELD_WINDOW_MS) return
+    const item = currentTutorItem
+    const playedMs = playingSince ? Date.now() - playingSince : null
+    if (currentResponseId) stoppedResponses.add(currentResponseId)
+    if (responding) {
+      send(currentResponseId ? { type: 'response.cancel', response_id: currentResponseId } : { type: 'response.cancel' })
+    }
+    send({ type: 'output_audio_buffer.clear' })
+    currentTutorItem = null
+    playingSince = null
+    h.onSpeaking(null)
+    if (item) {
+      stoppedItems.add(item)
+      h.onTutorYielded(item)
+      if (playedMs !== null) {
+        send({ type: 'conversation.item.truncate', item_id: item, content_index: 0, audio_end_ms: playedMs })
+      }
+    }
   }
 
   dc.onmessage = (msg) => {
@@ -200,22 +260,21 @@ export async function startLiveCall(
     }
     switch (ev.type) {
       case 'input_audio_buffer.speech_started':
-        h.onSpeaking('user')
+        yieldToStudent()
+        userSpeaking = true
+        if (!saidSomething) {
+          saidSomething = true
+          h.onTurnReady(true)
+        }
+        // while Ana is talking, she stays the one shown as speaking
+        if (playingSince === null) h.onSpeaking('user')
         capture.markStart()
         currentUserItem = ev.item_id ?? null
         if (ev.item_id) h.onCaption(ev.item_id, 'user', '🎤 …', false)
         break
-      case 'input_audio_buffer.speech_stopped': {
-        h.onSpeaking(null)
-        const id = ev.item_id ?? currentUserItem
-        if (id) {
-          void capture.cut().then((wav) => {
-            if (wav) h.onUtterance(id, wav)
-            else h.onUtteranceSkipped(id)
-          })
-        }
+      case 'input_audio_buffer.speech_stopped':
+        if (userSpeaking) endUtterance(ev.item_id ?? currentUserItem)
         break
-      }
       case 'conversation.item.input_audio_transcription.completed': {
         // provisional caption; the pronunciation checker replaces it
         const text = cleanUserCaption(ev.transcript ?? '')
@@ -223,6 +282,7 @@ export async function startLiveCall(
         break
       }
       case 'response.created':
+        responding = true
         currentResponseId = ev.response?.id ?? null
         if (paused && currentResponseId) {
           // a reply started while paused: cancel it
@@ -287,6 +347,7 @@ export async function startLiveCall(
         })
         break
       case 'response.done': {
+        responding = false
         // a response that was only a tool call leaves Ana silent — nudge her on
         const out: { type?: string }[] = ev.response?.output ?? []
         if (!paused && out.length > 0 && out.every((o) => o.type === 'function_call')) {
@@ -368,15 +429,35 @@ export async function startLiveCall(
     applyMic()
     ensurePlaying()
     h.onPaused(false)
-    // she stays quiet: auto-replies come back on, so she answers only once
-    // the student speaks — no new message, no new topic
-    setAutoReply(true)
+    // she stays quiet: auto-replies come back on (auto mode), so she answers
+    // only once the student speaks — no new message, no new topic
+    setAutoReply(autoReplyOn())
+  }
+
+  // tap mode: the student is done; whatever she said is Ana's to answer
+  const finishTurn = () => {
+    if (paused || responding) return
+    if (userSpeaking) {
+      // still mid-sentence as far as the server knows: close it now
+      send({ type: 'input_audio_buffer.commit' })
+      endUtterance(currentUserItem)
+    }
+    saidSomething = false
+    h.onTurnReady(false)
+    send({ type: 'response.create' })
+  }
+
+  const setTurnMode = (mode: TurnMode) => {
+    turnMode = mode
+    setAutoReply(autoReplyOn())
   }
 
   return {
     hangUp,
     stopAna,
     resumeAna,
+    finishTurn,
+    setTurnMode,
     setMuted: (muted) => {
       userMuted = muted
       applyMic()
